@@ -10,6 +10,7 @@ const MobilePupilTracker = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [fps, setFps] = useState(0);
   const [deviceInfo, setDeviceInfo] = useState({});
+  const [cameraPermission, setCameraPermission] = useState('prompt'); // 'prompt', 'granted', 'denied'
   
   // Refs for libraries and optimization
   const faceMeshRef = useRef(null);
@@ -29,7 +30,17 @@ const MobilePupilTracker = () => {
     blurKernelSize: 3
   };
 
-  const detectDeviceCapabilities = () => {
+  const requestCameraPermission = async () => {
+    try {
+      setCameraPermission('requesting');
+      setError(null);
+      await initializeCamera();
+      setCameraPermission('granted');
+    } catch (err) {
+      setCameraPermission('denied');
+      setError(err.message);
+    }
+  };
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     
@@ -44,27 +55,66 @@ const MobilePupilTracker = () => {
 
   const initializeCamera = async () => {
     try {
+      // Check if getUserMedia is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera API not supported on this device/browser');
+      }
+
+      // Simplified constraints for better iOS compatibility
       const constraints = {
         video: {
-          width: { ideal: mobileConfig.videoWidth },
-          height: { ideal: mobileConfig.videoHeight },
+          width: { ideal: mobileConfig.videoWidth, max: 640 },
+          height: { ideal: mobileConfig.videoHeight, max: 480 },
           frameRate: { ideal: 15, max: 30 },
           facingMode: 'user'
-        }
+        },
+        audio: false
       };
       
+      console.log('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      if (!stream || !stream.getVideoTracks().length) {
+        throw new Error('No video stream available');
+      }
+      
+      console.log('Camera stream obtained');
       videoRef.current.srcObject = stream;
       
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         videoRef.current.onloadedmetadata = () => {
-          videoRef.current.play();
-          resolve();
+          console.log('Video metadata loaded');
+          videoRef.current.play().then(() => {
+            console.log('Video playing');
+            resolve();
+          }).catch(reject);
         };
+        
+        videoRef.current.onerror = () => {
+          reject(new Error('Video element error'));
+        };
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          reject(new Error('Camera initialization timeout'));
+        }, 10000);
       });
       
     } catch (err) {
-      throw new Error('Camera access failed. Please allow camera permissions.');
+      console.error('Camera error:', err);
+      let errorMessage = 'Camera access failed. ';
+      
+      if (err.name === 'NotAllowedError') {
+        errorMessage += 'Please allow camera permissions and refresh the page.';
+      } else if (err.name === 'NotFoundError') {
+        errorMessage += 'No camera found on this device.';
+      } else if (err.name === 'NotSupportedError') {
+        errorMessage += 'Camera not supported by this browser.';
+      } else {
+        errorMessage += err.message || 'Unknown camera error.';
+      }
+      
+      throw new Error(errorMessage);
     }
   };
 
@@ -294,7 +344,7 @@ const MobilePupilTracker = () => {
     try {
       setIsLoading(true);
       
-      await initializeCamera();
+      // Don't auto-initialize camera, wait for user interaction
       await loadMediaPipe();
       await loadOpenCV();
       
@@ -345,7 +395,55 @@ const MobilePupilTracker = () => {
         <div className="text-center p-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <div className="text-blue-600 text-lg font-semibold">Loading...</div>
-          <div className="text-blue-500 text-sm mt-2">Optimizing for mobile device</div>
+          <div className="text-blue-500 text-sm mt-2">Initializing MediaPipe and OpenCV</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show camera permission prompt
+  if (cameraPermission === 'prompt') {
+    return (
+      <div className="max-w-md mx-auto p-4 bg-white rounded-lg shadow-lg">
+        <h1 className="text-2xl font-bold text-center mb-4 text-gray-800">
+          Mobile Pupil Tracker
+        </h1>
+        
+        <div className="text-center p-6 bg-blue-50 rounded-lg">
+          <div className="text-6xl mb-4">📷</div>
+          <h2 className="text-xl font-semibold mb-4 text-gray-800">
+            Camera Access Required
+          </h2>
+          <p className="text-gray-600 mb-6 text-sm">
+            This app needs camera access to track your pupils. 
+            Your camera data is processed locally and never sent to any server.
+          </p>
+          
+          <button
+            onClick={requestCameraPermission}
+            className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+          >
+            Enable Camera
+          </button>
+          
+          <div className="mt-4 text-xs text-gray-500">
+            <p>For iOS Safari:</p>
+            <p>• Make sure you're on HTTPS</p>
+            <p>• Tap "Allow" when prompted</p>
+            <p>• Check Settings → Safari → Camera if needed</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (cameraPermission === 'requesting') {
+    return (
+      <div className="flex items-center justify-center h-96 bg-blue-50 border border-blue-200 rounded-lg m-4">
+        <div className="text-center p-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div className="text-blue-600 text-lg font-semibold">Requesting Camera Access...</div>
+          <div className="text-blue-500 text-sm mt-2">Please allow camera permissions</div>
         </div>
       </div>
     );
