@@ -1,4 +1,3 @@
-// === src/App.jsx ===
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, CameraOff, RotateCcw, AlertCircle } from 'lucide-react';
 
@@ -48,16 +47,27 @@ function App() {
       const constraints = {
         video: {
           facingMode: facingMode,
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: 30, max: 60 }
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 30, max: 30 }
         },
         audio: false
       };
 
+      console.log('Requesting camera with constraints:', constraints);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Stream obtained:', stream);
+      console.log('Video tracks:', stream.getVideoTracks());
       
-      if (videoRef.current) {
+      if (videoRef.current && stream) {
+        console.log('Setting video source...');
+        
+        // Clear any existing source
+        videoRef.current.srcObject = null;
+        
+        // Wait a moment then set the new stream
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
         
@@ -67,11 +77,20 @@ function App() {
         videoRef.current.setAttribute('muted', 'true');
         videoRef.current.setAttribute('autoplay', 'true');
         
+        // Wait for video to load and play
+        const playPromise = videoRef.current.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+        }
+        
         // Additional Safari-specific optimizations
         videoRef.current.style.objectFit = 'cover';
         videoRef.current.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
         
+        console.log('Video should be playing now');
         setIsStreamActive(true);
+      } else {
+        throw new Error('Video element not available or stream is null');
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
@@ -83,6 +102,8 @@ function App() {
         errorMessage += 'No camera found on this device.';
       } else if (err.name === 'NotSupportedError') {
         errorMessage += 'Camera not supported on this device.';
+      } else if (err.name === 'NotReadableError') {
+        errorMessage += 'Camera is being used by another application.';
       } else {
         errorMessage += err.message;
       }
@@ -151,10 +172,14 @@ function App() {
                   webkit-playsinline="true"
                   muted
                   autoPlay
+                  onLoadedMetadata={() => console.log('Video metadata loaded')}
+                  onCanPlay={() => console.log('Video can play')}
+                  onPlay={() => console.log('Video started playing')}
                   onError={handleVideoError}
                   style={{
                     transform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
-                    WebkitTransform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'
+                    WebkitTransform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
+                    backgroundColor: '#1f2937' // Fallback background
                   }}
                 />
                 
