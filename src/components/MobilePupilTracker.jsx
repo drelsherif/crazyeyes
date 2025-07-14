@@ -80,16 +80,24 @@ const MobilePupilTracker = () => {
       
       // Request motion sensor permissions first (iOS pattern from your app)
       if (isIOSDevice && typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        const motionPermission = await DeviceMotionEvent.requestPermission();
-        if (motionPermission === 'granted') {
-          window.addEventListener('devicemotion', handleMotionEvent, true);
+        try {
+          const motionPermission = await DeviceMotionEvent.requestPermission();
+          if (motionPermission === 'granted') {
+            window.addEventListener('devicemotion', handleMotionEvent, true);
+          }
+        } catch (motionErr) {
+          console.log('Motion permission failed, continuing without motion data:', motionErr);
         }
       }
+      
+      // Add a small delay to ensure video element is rendered
+      await new Promise(resolve => setTimeout(resolve, 200));
       
       await initializeCamera();
       setCameraPermission('granted');
       
     } catch (err) {
+      console.error('Permission request failed:', err);
       setCameraPermission('denied');
       setError(err.message);
     }
@@ -99,6 +107,11 @@ const MobilePupilTracker = () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera API not supported on this device/browser');
+      }
+
+      // Ensure video element exists
+      if (!videoRef.current) {
+        throw new Error('Video element not ready');
       }
 
       const constraints = {
@@ -118,23 +131,48 @@ const MobilePupilTracker = () => {
         throw new Error('No video stream available');
       }
       
-      console.log('Camera stream obtained');
+      console.log('Camera stream obtained, setting up video...');
+      
+      // Wait a bit for video element to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      if (!videoRef.current) {
+        throw new Error('Video element became null after stream creation');
+      }
+      
       videoRef.current.srcObject = stream;
       
       return new Promise((resolve, reject) => {
-        videoRef.current.onloadedmetadata = () => {
+        const video = videoRef.current;
+        
+        const onLoadedMetadata = () => {
           console.log('Video metadata loaded');
-          videoRef.current.play().then(() => {
-            console.log('Video playing');
+          video.removeEventListener('loadedmetadata', onLoadedMetadata);
+          video.removeEventListener('error', onError);
+          
+          video.play().then(() => {
+            console.log('Video playing successfully');
             resolve();
-          }).catch(reject);
+          }).catch(err => {
+            console.error('Video play failed:', err);
+            reject(new Error(`Video play failed: ${err.message}`));
+          });
         };
         
-        videoRef.current.onerror = () => {
+        const onError = (err) => {
+          console.error('Video error:', err);
+          video.removeEventListener('loadedmetadata', onLoadedMetadata);
+          video.removeEventListener('error', onError);
           reject(new Error('Video element error'));
         };
         
+        video.addEventListener('loadedmetadata', onLoadedMetadata);
+        video.addEventListener('error', onError);
+        
+        // Timeout after 10 seconds
         setTimeout(() => {
+          video.removeEventListener('loadedmetadata', onLoadedMetadata);
+          video.removeEventListener('error', onError);
           reject(new Error('Camera initialization timeout'));
         }, 10000);
       });
@@ -399,13 +437,29 @@ const MobilePupilTracker = () => {
       <div className="flex items-center justify-center h-96 bg-red-50 border border-red-200 rounded-lg m-4">
         <div className="text-center p-4">
           <div className="text-red-600 text-lg font-semibold mb-2">Error</div>
-          <div className="text-red-500 text-sm">{error}</div>
-          <button 
-            onClick={() => window.location.reload()} 
-            className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            Retry
-          </button>
+          <div className="text-red-500 text-sm mb-4">{error}</div>
+          
+          <div className="space-y-2">
+            <button 
+              onClick={resetAndRetry}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+            >
+              Try Again
+            </button>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+          
+          <div className="mt-4 text-xs text-gray-600">
+            <p>Troubleshooting:</p>
+            <p>• Make sure you're using Safari on iOS</p>
+            <p>• Check Settings → Safari → Camera permissions</p>
+            <p>• Try refreshing the page</p>
+          </div>
         </div>
       </div>
     );
