@@ -37,7 +37,7 @@ export default defineConfig({
     })
   ],
   server: {
-    https: true, // Enable HTTPS for local development
-    host: '0.0.0.0' // Allow external connections for mobile testing
+    https: true,
+    host: '0.0.0.0'
   }
 })
