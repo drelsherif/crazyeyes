@@ -42,7 +42,7 @@ const MobilePupilTracker = () => {
   };
 
   // Detect device capabilities
-  const detectDeviceCapabilities = () => { // Missing opening brace fixed here
+  const detectDeviceCapabilities = () => {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     
@@ -141,7 +141,7 @@ const MobilePupilTracker = () => {
       }
       
       if (!videoRef.current) {
-        throw new Error('Video element not available after waiting');
+        throw new Error('Video element not available after waiting'); // This is the error from the logs
       }
       
       addDebugLog('Video element found, requesting camera...');
@@ -198,13 +198,13 @@ const MobilePupilTracker = () => {
         video.addEventListener('error', onError);
         
         setTimeout(() => {
-          if (video.readyState < 3) { // Check if video is not yet playing
+          if (video.readyState < 3) {
             video.removeEventListener('loadedmetadata', onLoadedMetadata);
             video.removeEventListener('error', onError);
             addDebugLog('Camera initialization timeout');
             reject(new Error('Camera initialization timeout: Video failed to load or play.'));
           }
-        }, 15000); // 15 seconds timeout
+        }, 15000);
       });
       
     } catch (err) {
@@ -238,7 +238,7 @@ const MobilePupilTracker = () => {
       
       const script = document.createElement('script');
       script.src = 'https://docs.opencv.org/4.5.0/opencv.js';
-      script.async = true; // Added async to script
+      script.async = true;
       document.head.appendChild(script);
       
       await new Promise((resolve, reject) => {
@@ -287,7 +287,7 @@ const MobilePupilTracker = () => {
       
       const faceMeshScript = document.createElement('script');
       faceMeshScript.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js';
-      faceMeshScript.async = true; // Added async to script
+      faceMeshScript.async = true;
       document.head.appendChild(faceMeshScript);
       
       await new Promise((resolve, reject) => {
@@ -414,16 +414,13 @@ const MobilePupilTracker = () => {
     try {
       const cv = cvRef.current;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true }); // Add willReadFrequently for performance
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       
-      // Ensure the canvas dimensions match the video
       canvas.width = videoRef.current.videoWidth || mobileConfig.videoWidth;
       canvas.height = videoRef.current.videoHeight || mobileConfig.videoHeight;
 
-      // Draw the video frame to the canvas
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
 
-      // Get image data for the eye region from the canvas
       const imageData = ctx.getImageData(
         Math.floor(eyeRegion.x),
         Math.floor(eyeRegion.y),
@@ -482,7 +479,7 @@ const MobilePupilTracker = () => {
           });
         }
       } else {
-        setPupilData(null); // Clear pupil data if not found
+        setPupilData(null);
       }
       
       src.delete();
@@ -496,14 +493,13 @@ const MobilePupilTracker = () => {
       addDebugLog(`Pupil analysis error: ${err.message}`);
       console.error('Pupil analysis error:', err);
     }
-  }, [mobileConfig.blurKernelSize, mobileConfig.pupilMinArea, mobileConfig.videoWidth, mobileConfig.videoHeight]); // Added mobileConfig deps
+  }, [mobileConfig.blurKernelSize, mobileConfig.pupilMinArea, mobileConfig.videoWidth, mobileConfig.videoHeight]);
 
   // Callback for FaceMesh results
   const onFaceMeshResults = useCallback((results) => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     
-    // Clear the canvas and draw the video frame
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     
@@ -523,18 +519,18 @@ const MobilePupilTracker = () => {
         
         analyzePupilMobile(eyeRegion);
       } else {
-        setPupilData(null); // Clear pupil data if no eye region is detected
+        setPupilData(null);
       }
     } else {
-      setPupilData(null); // Clear pupil data if no faces are detected
+      setPupilData(null);
     }
-    updateFPS(); // Update FPS after processing
-  }, [selectedEye, analyzePupilMobile]); // Added analyzePupilMobile as a dependency
+    updateFPS();
+  }, [selectedEye, analyzePupilMobile]);
 
   // Start the processing loop for FaceMesh
   const startProcessingLoop = () => {
     const processFrame = async () => {
-      if (faceMeshRef.current && videoRef.current && videoRef.current.readyState >= 2) { // Ensure video is ready
+      if (faceMeshRef.current && videoRef.current && videoRef.current.readyState >= 2) {
         try {
           setIsProcessing(true);
           await faceMeshRef.current.send({ image: videoRef.current });
@@ -567,7 +563,6 @@ const MobilePupilTracker = () => {
       faceMeshRef.current.close();
       faceMeshRef.current = null;
     }
-    // Clear video stream if any
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = videoRef.current.srcObject.getTracks();
       tracks.forEach(track => track.stop());
@@ -578,7 +573,7 @@ const MobilePupilTracker = () => {
 
   // Effect hook for component lifecycle
   useEffect(() => {
-    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; // More robust iOS detection
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     setIsIOSDevice(iOS);
     detectDeviceCapabilities();
     initializeLibraries();
@@ -591,14 +586,13 @@ const MobilePupilTracker = () => {
         clearTimeout(processingTimeoutRef.current);
       }
       window.removeEventListener('devicemotion', handleMotionEvent);
-      // Stop camera tracks on unmount
       if (videoRef.current && videoRef.current.srcObject) {
         const tracks = videoRef.current.srcObject.getTracks();
         tracks.forEach(track => track.stop());
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array means this runs once on mount and cleanup on unmount
+  }, []);
 
   if (error) {
     return (
@@ -749,7 +743,8 @@ const MobilePupilTracker = () => {
       <div className="relative mb-4">
         <video
           ref={videoRef}
-          className="hidden" // Keep video hidden but ensure it's rendering for processing
+          // Change `hidden` to `visually-hidden` if you use the CSS solution
+          className="visually-hidden" // Use this if you define .visually-hidden in your CSS
           width={mobileConfig.videoWidth}
           height={mobileConfig.videoHeight}
           autoPlay
