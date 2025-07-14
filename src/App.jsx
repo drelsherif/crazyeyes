@@ -43,6 +43,12 @@ function App() {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
 
+      console.log('Video element available:', !!videoRef.current);
+      
+      if (!videoRef.current) {
+        throw new Error('Video element not found');
+      }
+
       // Request camera access with constraints optimized for Safari/mobile
       const constraints = {
         video: {
@@ -60,31 +66,10 @@ function App() {
       console.log('Video tracks:', stream.getVideoTracks());
       console.log('Stream active:', stream.active);
       
-      // Store the stream first
+      // Store the stream
       streamRef.current = stream;
       
-      // Update state to show video element
-      setIsStreamActive(true);
-      
-      // Wait for React to render the video element
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Check if video element is now available
-      let attempts = 0;
-      while (!videoRef.current && attempts < 10) {
-        console.log('Waiting for video element... attempt', attempts + 1);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      
-      if (!videoRef.current) {
-        throw new Error('Video element still not available after waiting');
-      }
-      
-      console.log('Video element found:', !!videoRef.current);
-      console.log('Video element dimensions:', videoRef.current.offsetWidth, videoRef.current.offsetHeight);
-      
-      // Now set the video source
+      // Set the video source directly
       videoRef.current.srcObject = stream;
       
       // Set video attributes
@@ -92,7 +77,7 @@ function App() {
       videoRef.current.playsInline = true;
       videoRef.current.autoplay = true;
       
-      // Force video to load and play
+      // Force video to load
       videoRef.current.load();
       
       // Wait for loadedmetadata event
@@ -122,11 +107,13 @@ function App() {
       // Set transform after everything is loaded
       videoRef.current.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
       
+      // Update state to show camera is active
+      setIsStreamActive(true);
+      
       console.log('Video setup complete');
       
     } catch (err) {
       console.error('Error accessing camera:', err);
-      setIsStreamActive(false); // Reset state on error
       
       // Clean up stream on error
       if (streamRef.current) {
@@ -203,46 +190,55 @@ function App() {
       <div className="flex-1 flex flex-col p-3 min-h-0">
         <div className="flex-1 flex items-center justify-center">
           <div className="relative w-full max-w-lg mx-auto h-full max-h-96">
-            {isStreamActive ? (
-              <div className="relative bg-gray-900 rounded-2xl overflow-hidden shadow-2xl h-full">
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-cover"
-                  playsInline
-                  webkit-playsinline="true"
-                  muted
-                  autoPlay
-                  onLoadedMetadata={() => console.log('Video metadata loaded')}
-                  onCanPlay={() => console.log('Video can play')}
-                  onPlay={() => console.log('Video started playing')}
-                  onError={handleVideoError}
-                  style={{
-                    transform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
-                    WebkitTransform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
-                    backgroundColor: '#1f2937' // Fallback background
-                  }}
-                />
+            {/* Video element always visible */}
+            <div className="relative bg-gray-900 rounded-2xl overflow-hidden shadow-2xl h-full">
+              <video
+                ref={videoRef}
+                className="w-full h-full object-cover"
+                playsInline
+                webkit-playsinline="true"
+                muted
+                autoPlay
+                onLoadedMetadata={() => console.log('Video metadata loaded')}
+                onCanPlay={() => console.log('Video can play')}
+                onPlay={() => console.log('Video started playing')}
+                onError={handleVideoError}
+                style={{
+                  transform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
+                  WebkitTransform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)',
+                  backgroundColor: '#1f2937' // Fallback background
+                }}
+              />
+              
+              {/* Overlay status */}
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="w-full h-full flex items-center justify-center">
+                  {!isStreamActive && !isLoading && (
+                    <div className="text-center">
+                      <Camera size={48} className="mx-auto mb-4 text-gray-400" />
+                      <p className="text-gray-400 mb-2 text-sm">Front camera ready</p>
+                      <p className="text-xs text-gray-500">Click start to begin</p>
+                    </div>
+                  )}
+                  {isLoading && (
+                    <div className="text-center">
+                      <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                      <p className="text-gray-400 text-sm">Starting camera...</p>
+                    </div>
+                  )}
+                </div>
                 
-                {/* Overlay for future landmarks */}
-                <div className="absolute inset-0 pointer-events-none">
-                  <div className="w-full h-full flex items-end justify-center p-4">
-                    <div className="text-white text-xs bg-black bg-opacity-60 px-3 py-1 rounded-full backdrop-blur-sm">
-                      Phase 1: Front Camera Active
+                {/* Status indicator when active */}
+                {isStreamActive && (
+                  <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2">
+                    <div className="text-white text-xs bg-black bg-opacity-60 px-3 py-1 rounded-full backdrop-blur-sm flex items-center space-x-2">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                      <span>Phase 1: Camera Active</span>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
-            ) : (
-              <div className="bg-gray-900 rounded-2xl p-8 text-center h-full flex flex-col items-center justify-center">
-                <Camera size={48} className="mx-auto mb-4 text-gray-400" />
-                <p className="text-gray-400 mb-2 text-sm">
-                  {isLoading ? 'Starting front camera...' : 'Front camera ready'}
-                </p>
-                <p className="text-xs text-gray-500">
-                  Optimized for Safari & PWA
-                </p>
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
