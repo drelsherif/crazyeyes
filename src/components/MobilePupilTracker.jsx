@@ -12,6 +12,7 @@ const MobilePupilTracker = () => {
   const [deviceInfo, setDeviceInfo] = useState({});
   const [cameraPermission, setCameraPermission] = useState('prompt');
   const [isIOSDevice, setIsIOSDevice] = useState(false);
+  const [librariesLoaded, setLibrariesLoaded] = useState(false);
   
   // Refs for libraries and optimization
   const faceMeshRef = useRef(null);
@@ -94,6 +95,12 @@ const MobilePupilTracker = () => {
       await new Promise(resolve => setTimeout(resolve, 200));
       
       await initializeCamera();
+      
+      // Start processing once camera is ready and libraries are loaded
+      if (librariesLoaded && faceMeshRef.current) {
+        startProcessingLoop();
+      }
+      
       setCameraPermission('granted');
       
     } catch (err) {
@@ -196,31 +203,53 @@ const MobilePupilTracker = () => {
   };
 
   const loadOpenCV = async () => {
-    return new Promise((resolve, reject) => {
+    try {
+      console.log('Loading OpenCV...');
+      
       if (window.cv && window.cv.Mat) {
+        console.log('OpenCV already loaded');
         cvRef.current = window.cv;
-        resolve();
         return;
       }
       
       const script = document.createElement('script');
       script.src = 'https://docs.opencv.org/4.5.0/opencv.js';
-      
-      script.onload = () => {
-        const checkOpenCV = () => {
-          if (window.cv && window.cv.Mat) {
-            cvRef.current = window.cv;
-            resolve();
-          } else {
-            setTimeout(checkOpenCV, 100);
-          }
-        };
-        checkOpenCV();
-      };
-      
-      script.onerror = () => reject(new Error('OpenCV failed to load'));
       document.head.appendChild(script);
-    });
+      
+      await new Promise((resolve, reject) => {
+        script.onload = () => {
+          console.log('OpenCV script loaded');
+          resolve();
+        };
+        script.onerror = () => {
+          console.error('OpenCV script failed to load');
+          reject(new Error('OpenCV script failed to load'));
+        };
+        
+        // Timeout after 20 seconds (OpenCV is large)
+        setTimeout(() => {
+          reject(new Error('OpenCV loading timeout'));
+        }, 20000);
+      });
+      
+      // Wait for OpenCV to be ready
+      let attempts = 0;
+      while ((!window.cv || !window.cv.Mat) && attempts < 100) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        attempts++;
+      }
+      
+      if (!window.cv || !window.cv.Mat) {
+        throw new Error('OpenCV not available after loading');
+      }
+      
+      cvRef.current = window.cv;
+      console.log('OpenCV ready');
+      
+    } catch (err) {
+      console.error('OpenCV loading error:', err);
+      throw new Error(`OpenCV initialization failed: ${err.message}`);
+    }
   };
 
   const updateFPS = () => {
@@ -384,15 +413,68 @@ const MobilePupilTracker = () => {
 
   const loadMediaPipe = async () => {
     try {
+      console.log('Loading MediaPipe...');
+      
+      // Check if already loaded
+      if (window.FaceMesh) {
+        console.log('MediaPipe already loaded');
+        return;
+      }
+      
       const faceMeshScript = document.createElement('script');
       faceMeshScript.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js';
       document.head.appendChild(faceMeshScript);
       
       await new Promise((resolve, reject) => {
-        faceMeshScript.onload = resolve;
-        faceMeshScript.onerror = reject;
+        faceMeshScript.onload = () => {
+          console.log('MediaPipe script loaded');
+          resolve();
+        };
+        faceMeshScript.onerror = () => {
+          console.error('MediaPipe script failed to load');
+          reject(new Error('MediaPipe script failed to load'));
+        };
+        
+        // Timeout after 15 seconds
+        setTimeout(() => {
+          reject(new Error('MediaPipe loading timeout'));
+        }, 15000);
       });
       
+      // Wait for FaceMesh to be available
+      let attempts = 0;
+      while (!window.FaceMesh && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      
+      if (!window.FaceMesh) {
+        throw new Error('MediaPipe FaceMesh not available after loading');
+      }
+      
+      console.log('MediaPipe FaceMesh available');
+      
+    } catch (err) {
+      console.error('MediaPipe loading error:', err);
+      throw new Error(`MediaPipe initialization failed: ${err.message}`);
+    }
+  };
+
+  const initializeLibraries = async () => {
+    try {
+      console.log('Starting library initialization...');
+      setIsLoading(true);
+      setError(null);
+      
+      // Load libraries in parallel for better performance
+      await Promise.all([
+        loadMediaPipe(),
+        loadOpenCV()
+      ]);
+      
+      console.log('Libraries loaded, setting up MediaPipe...');
+      
+      // Now setup MediaPipe with the loaded library
       const faceMesh = new window.FaceMesh({
         locateFile: (file) => {
           return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`;
@@ -409,26 +491,15 @@ const MobilePupilTracker = () => {
       faceMesh.onResults(onFaceMeshResults);
       faceMeshRef.current = faceMesh;
       
-      startProcessingLoop();
-      
-    } catch (err) {
-      throw new Error('MediaPipe initialization failed');
-    }
-  };
-
-  const initializeLibraries = async () => {
-    try {
-      setIsLoading(true);
-      
-      await loadMediaPipe();
-      await loadOpenCV();
-      
+      setLibrariesLoaded(true);
       setIsLoading(false);
+      console.log('All libraries initialized successfully');
       
     } catch (err) {
       console.error('Error initializing libraries:', err);
       setError(`Failed to initialize: ${err.message}`);
       setIsLoading(false);
+      setLibrariesLoaded(false);
     }
   };
 
@@ -465,13 +536,19 @@ const MobilePupilTracker = () => {
     );
   }
 
-  if (isLoading) {
+  // Show loading screen while libraries load
+  if (isLoading || !librariesLoaded) {
     return (
       <div className="flex items-center justify-center h-96 bg-blue-50 border border-blue-200 rounded-lg m-4">
         <div className="text-center p-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <div className="text-blue-600 text-lg font-semibold">Loading...</div>
-          <div className="text-blue-500 text-sm mt-2">Initializing MediaPipe and OpenCV</div>
+          <div className="text-blue-500 text-sm mt-2">
+            {isLoading ? 'Initializing MediaPipe and OpenCV' : 'Setting up libraries...'}
+          </div>
+          <div className="text-xs text-gray-500 mt-2">
+            This may take 10-20 seconds on mobile
+          </div>
         </div>
       </div>
     );
