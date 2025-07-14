@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, CameraOff, RotateCcw, AlertCircle, ZoomIn, ZoomOut, Play, Square, BarChart3 } from 'lucide-react';
+import { Camera, CameraOff, RotateCcw, AlertCircle, ZoomIn, ZoomOut, Play, Square, BarChart3, Eye } from 'lucide-react';
 
 function App() {
   const [isStreamActive, setIsStreamActive] = useState(false);
@@ -16,6 +16,7 @@ function App() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [showGraph, setShowGraph] = useState(false);
   const [currentPupilData, setCurrentPupilData] = useState(null);
+  const [focusMode, setFocusMode] = useState('both'); // 'both', 'left', 'right'
   
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -148,7 +149,7 @@ function App() {
     initializeMediaPipe();
   }, [isMediaPipeLoaded]);
 
-  // Improved pupil detection using OpenCV
+  // Enhanced pupil detection with focus mode support
   const detectPupils = useCallback((landmarks) => {
     if (!window.cv || !videoRef.current || !landmarks) {
       console.log('OpenCV not ready or no landmarks');
@@ -158,56 +159,57 @@ function App() {
     try {
       const video = videoRef.current;
       
-      // Create a temporary canvas to capture video frame
       const tempCanvas = document.createElement('canvas');
       const tempCtx = tempCanvas.getContext('2d');
       tempCanvas.width = video.videoWidth;
       tempCanvas.height = video.videoHeight;
       
-      // Draw current video frame
       tempCtx.drawImage(video, 0, 0);
       
-      // Get image data
       const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const src = window.cv.matFromImageData(imageData);
       
-      // Convert to grayscale
       const gray = new window.cv.Mat();
       window.cv.cvtColor(src, gray, window.cv.COLOR_RGBA2GRAY);
       
-      // Get eye regions from MediaPipe landmarks
-      const leftEyeData = getEyeRegionAndPupil(gray, landmarks, 'left', tempCanvas.width, tempCanvas.height);
-      const rightEyeData = getEyeRegionAndPupil(gray, landmarks, 'right', tempCanvas.width, tempCanvas.height);
+      let result = { timestamp: Date.now() };
       
-      // Cleanup
+      // Process based on focus mode
+      if (focusMode === 'both' || focusMode === 'left') {
+        result.left = getEyeRegionAndPupil(gray, landmarks, 'left', tempCanvas.width, tempCanvas.height);
+      }
+      
+      if (focusMode === 'both' || focusMode === 'right') {
+        result.right = getEyeRegionAndPupil(gray, landmarks, 'right', tempCanvas.width, tempCanvas.height);
+      }
+      
+      // Fill in default values for non-focused eyes
+      if (focusMode === 'left') {
+        result.right = { size: 0, center: null, region: null };
+      } else if (focusMode === 'right') {
+        result.left = { size: 0, center: null, region: null };
+      }
+      
       src.delete();
       gray.delete();
       
-      const result = {
-        left: leftEyeData,
-        right: rightEyeData,
-        timestamp: Date.now()
-      };
-      
-      console.log('Pupil detection result:', result);
+      console.log(`Pupil detection result (${focusMode} mode):`, result);
       return result;
       
     } catch (error) {
       console.error('Pupil detection error:', error);
       return null;
     }
-  }, []);
+  }, [focusMode]);
 
-  // Enhanced eye region extraction and pupil detection
+  // Enhanced eye region extraction with focus mode optimization
   const getEyeRegionAndPupil = (grayMat, landmarks, eye, width, height) => {
     try {
-      // More precise eye landmark indices for better eye region
       const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
       const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
       
       const indices = eye === 'left' ? leftEyeIndices : rightEyeIndices;
       
-      // Calculate bounding box of eye region
       let minX = width, minY = height, maxX = 0, maxY = 0;
       
       indices.forEach(index => {
@@ -222,8 +224,8 @@ function App() {
         }
       });
       
-      // Add padding and ensure bounds
-      const padding = 15;
+      // Larger padding for focused mode
+      const padding = focusMode === eye ? 20 : 15;
       const eyeRegion = {
         x: Math.max(0, Math.floor(minX - padding)),
         y: Math.max(0, Math.floor(minY - padding)),
@@ -231,29 +233,36 @@ function App() {
         height: Math.min(height - Math.floor(minY - padding), Math.floor(maxY - minY + 2 * padding))
       };
       
-      // Ensure minimum size
       if (eyeRegion.width < 30 || eyeRegion.height < 20) {
         console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
         return { size: 0, center: null, region: eyeRegion };
       }
       
-      // Extract eye region
       const eyeROI = grayMat.roi(new window.cv.Rect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height));
       
-      // Apply Gaussian blur to reduce noise
+      // Enhanced processing for focused eye
       const blurred = new window.cv.Mat();
-      window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
+      const blurSize = focusMode === eye ? 7 : 5; // More blur for focused eye
+      window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(blurSize, blurSize), 0);
       
-      // Apply adaptive threshold to find dark regions (pupil)
       const thresh = new window.cv.Mat();
+      const thresholdValue = focusMode === eye ? 45 : 50; // Lower threshold for focused eye
       window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
       
-      // Morphological operations to clean up the image
-      const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(3, 3));
+      // More aggressive morphological operations for focused eye
+      const kernelSize = focusMode === eye ? 5 : 3;
+      const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
       const morphed = new window.cv.Mat();
       window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
       
-      // Find contours
+      if (focusMode === eye) {
+        // Additional processing for focused eye
+        const opened = new window.cv.Mat();
+        window.cv.morphologyEx(morphed, opened, window.cv.MORPH_OPEN, kernel);
+        morphed.delete();
+        morphed = opened;
+      }
+      
       const contours = new window.cv.MatVector();
       const hierarchy = new window.cv.Mat();
       window.cv.findContours(morphed, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
@@ -261,32 +270,36 @@ function App() {
       let bestPupil = { size: 0, center: null };
       let maxScore = 0;
       
-      // Find the best pupil candidate
+      // Adjusted scoring for focus mode
+      const minArea = focusMode === eye ? 30 : 50;
+      const maxArea = focusMode === eye ? 3000 : 2000;
+      
       for (let i = 0; i < contours.size(); i++) {
         const contour = contours.get(i);
         const area = window.cv.contourArea(contour);
         
-        // Filter by area (pupil should be reasonably sized)
-        if (area > 50 && area < 2000) {
-          // Get contour properties
+        if (area > minArea && area < maxArea) {
           const moments = window.cv.moments(contour);
           const perimeter = window.cv.arcLength(contour, true);
           const circularity = 4 * Math.PI * area / (perimeter * perimeter);
           
-          // Calculate center
           let centerX = 0, centerY = 0;
           if (moments.m00 !== 0) {
             centerX = moments.m10 / moments.m00;
             centerY = moments.m01 / moments.m00;
           }
           
-          // Score based on area, circularity, and position
-          const score = area * circularity;
+          // Enhanced scoring for focused eye
+          let score = area * circularity;
+          if (focusMode === eye) {
+            score *= 1.5; // Boost score for focused eye
+          }
           
-          if (score > maxScore && circularity > 0.3) {
+          const minCircularity = focusMode === eye ? 0.2 : 0.3;
+          if (score > maxScore && circularity > minCircularity) {
             maxScore = score;
             bestPupil = {
-              size: Math.sqrt(area / Math.PI) * 2, // Diameter from area
+              size: Math.sqrt(area / Math.PI) * 2,
               center: {
                 x: eyeRegion.x + centerX,
                 y: eyeRegion.y + centerY
@@ -317,7 +330,7 @@ function App() {
     }
   };
 
-  // MediaPipe results handler with improved pupil detection
+  // MediaPipe results handler
   const onFaceMeshResults = useCallback((results) => {
     if (!canvasRef.current || !videoRef.current) return;
 
@@ -334,7 +347,7 @@ function App() {
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
       
-      // Draw iris landmarks
+      // Draw iris landmarks based on focus mode
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
       // Detect pupils if OpenCV is loaded
@@ -349,12 +362,22 @@ function App() {
           // Record data if recording
           if (isRecording) {
             const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
-            const dataPoint = {
+            let dataPoint = {
               time: timeElapsed,
-              left: pupilData.left.size,
-              right: pupilData.right.size,
               timestamp: pupilData.timestamp
             };
+            
+            // Add pupil data based on focus mode
+            if (focusMode === 'both') {
+              dataPoint.left = pupilData.left?.size || 0;
+              dataPoint.right = pupilData.right?.size || 0;
+            } else if (focusMode === 'left') {
+              dataPoint.left = pupilData.left?.size || 0;
+              dataPoint.right = 0; // Not tracking
+            } else if (focusMode === 'right') {
+              dataPoint.left = 0; // Not tracking
+              dataPoint.right = pupilData.right?.size || 0;
+            }
             
             setRecordingData(prev => {
               const newData = [...prev, dataPoint];
@@ -365,112 +388,146 @@ function App() {
         }
       }
     }
-  }, [isOpenCVLoaded, isRecording, detectPupils]);
+  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode]);
 
-  // Draw pupil overlays on canvas
+  // Enhanced pupil overlay drawing with focus mode
   const drawPupilOverlays = (ctx, pupilData, videoWidth, videoHeight, canvasWidth, canvasHeight) => {
     const scaleX = canvasWidth / videoWidth;
     const scaleY = canvasHeight / videoHeight;
     
-    // Draw left pupil
-    if (pupilData.left.center && pupilData.left.size > 0) {
+    // Draw left pupil (only if tracking)
+    if ((focusMode === 'both' || focusMode === 'left') && pupilData.left?.center && pupilData.left.size > 0) {
       const leftX = pupilData.left.center.x * scaleX;
       const leftY = pupilData.left.center.y * scaleY;
       const leftRadius = (pupilData.left.size / 2) * Math.min(scaleX, scaleY);
       
-      ctx.strokeStyle = '#00ffff';
-      ctx.lineWidth = 2;
-      ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+      // Enhanced visualization for focused eye
+      const isLeftFocused = focusMode === 'left';
+      ctx.strokeStyle = isLeftFocused ? '#00ffff' : '#00cccc';
+      ctx.lineWidth = isLeftFocused ? 3 : 2;
+      ctx.fillStyle = isLeftFocused ? 'rgba(0, 255, 255, 0.3)' : 'rgba(0, 255, 255, 0.2)';
+      
       ctx.beginPath();
       ctx.arc(leftX, leftY, leftRadius, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
       
-      // Draw center dot
+      // Enhanced center dot for focused eye
       ctx.fillStyle = '#00ffff';
       ctx.beginPath();
-      ctx.arc(leftX, leftY, 2, 0, 2 * Math.PI);
+      ctx.arc(leftX, leftY, isLeftFocused ? 3 : 2, 0, 2 * Math.PI);
       ctx.fill();
+      
+      // Additional crosshair for focused eye
+      if (isLeftFocused) {
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(leftX - 8, leftY);
+        ctx.lineTo(leftX + 8, leftY);
+        ctx.moveTo(leftX, leftY - 8);
+        ctx.lineTo(leftX, leftY + 8);
+        ctx.stroke();
+      }
     }
     
-    // Draw right pupil
-    if (pupilData.right.center && pupilData.right.size > 0) {
+    // Draw right pupil (only if tracking)
+    if ((focusMode === 'both' || focusMode === 'right') && pupilData.right?.center && pupilData.right.size > 0) {
       const rightX = pupilData.right.center.x * scaleX;
       const rightY = pupilData.right.center.y * scaleY;
       const rightRadius = (pupilData.right.size / 2) * Math.min(scaleX, scaleY);
       
-      ctx.strokeStyle = '#ffff00';
-      ctx.lineWidth = 2;
-      ctx.fillStyle = 'rgba(255, 255, 0, 0.2)';
+      const isRightFocused = focusMode === 'right';
+      ctx.strokeStyle = isRightFocused ? '#ffff00' : '#cccc00';
+      ctx.lineWidth = isRightFocused ? 3 : 2;
+      ctx.fillStyle = isRightFocused ? 'rgba(255, 255, 0, 0.3)' : 'rgba(255, 255, 0, 0.2)';
+      
       ctx.beginPath();
       ctx.arc(rightX, rightY, rightRadius, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
       
-      // Draw center dot
       ctx.fillStyle = '#ffff00';
       ctx.beginPath();
-      ctx.arc(rightX, rightY, 2, 0, 2 * Math.PI);
+      ctx.arc(rightX, rightY, isRightFocused ? 3 : 2, 0, 2 * Math.PI);
       ctx.fill();
+      
+      if (isRightFocused) {
+        ctx.strokeStyle = '#ffff00';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(rightX - 8, rightY);
+        ctx.lineTo(rightX + 8, rightY);
+        ctx.moveTo(rightX, rightY - 8);
+        ctx.lineTo(rightX, rightY + 8);
+        ctx.stroke();
+      }
     }
   };
 
-  // Draw iris landmarks
+  // Enhanced iris landmark drawing with focus mode
   const drawIrisLandmarks = (ctx, landmarks, width, height) => {
     const leftIris = [468, 469, 470, 471, 472];
     const rightIris = [473, 474, 475, 476, 477];
 
-    // Draw left iris
-    ctx.strokeStyle = '#00ff00';
-    ctx.lineWidth = 2;
-    ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
-    
-    ctx.beginPath();
-    leftIris.forEach((index, i) => {
-      const point = landmarks[index];
-      const x = point.x * width;
-      const y = point.y * height;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    // Draw left iris (dimmed if not focused)
+    if (focusMode === 'both' || focusMode === 'left') {
+      const isLeftFocused = focusMode === 'left';
+      ctx.strokeStyle = isLeftFocused ? '#00ff00' : '#006600';
+      ctx.lineWidth = isLeftFocused ? 3 : 2;
+      ctx.fillStyle = isLeftFocused ? 'rgba(0, 255, 0, 0.15)' : 'rgba(0, 255, 0, 0.05)';
+      
+      ctx.beginPath();
+      leftIris.forEach((index, i) => {
+        const point = landmarks[index];
+        const x = point.x * width;
+        const y = point.y * height;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
 
-    // Draw right iris
-    ctx.strokeStyle = '#ff0000';
-    ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
-    
-    ctx.beginPath();
-    rightIris.forEach((index, i) => {
-      const point = landmarks[index];
-      const x = point.x * width;
-      const y = point.y * height;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+      // Center point
+      ctx.fillStyle = isLeftFocused ? '#00ff00' : '#006600';
+      const leftCenter = landmarks[468];
+      ctx.beginPath();
+      ctx.arc(leftCenter.x * width, leftCenter.y * height, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
+      ctx.fill();
+    }
 
-    // Draw center points
-    ctx.fillStyle = '#00ff00';
-    const leftCenter = landmarks[468];
-    ctx.beginPath();
-    ctx.arc(leftCenter.x * width, leftCenter.y * height, 3, 0, 2 * Math.PI);
-    ctx.fill();
+    // Draw right iris (dimmed if not focused)
+    if (focusMode === 'both' || focusMode === 'right') {
+      const isRightFocused = focusMode === 'right';
+      ctx.strokeStyle = isRightFocused ? '#ff0000' : '#660000';
+      ctx.lineWidth = isRightFocused ? 3 : 2;
+      ctx.fillStyle = isRightFocused ? 'rgba(255, 0, 0, 0.15)' : 'rgba(255, 0, 0, 0.05)';
+      
+      ctx.beginPath();
+      rightIris.forEach((index, i) => {
+        const point = landmarks[index];
+        const x = point.x * width;
+        const y = point.y * height;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
 
-    ctx.fillStyle = '#ff0000';
-    const rightCenter = landmarks[473];
-    ctx.beginPath();
-    ctx.arc(rightCenter.x * width, rightCenter.y * height, 3, 0, 2 * Math.PI);
-    ctx.fill();
+      ctx.fillStyle = isRightFocused ? '#ff0000' : '#660000';
+      const rightCenter = landmarks[473];
+      ctx.beginPath();
+      ctx.arc(rightCenter.x * width, rightCenter.y * height, isRightFocused ? 4 : 3, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   };
 
   // Process video frame for MediaPipe
@@ -542,7 +599,7 @@ function App() {
       setError('MediaPipe not initialized yet. Please wait.');
       return;
     }
-    console.log('Starting recording...');
+    console.log(`Starting recording in ${focusMode} mode...`);
     setIsRecording(true);
     setShowGraph(false);
     setRecordingData([]);
@@ -551,7 +608,10 @@ function App() {
   const stopRecording = () => {
     console.log('Stopping recording...');
     setIsRecording(false);
-    setShowGraph(true);
+    // Always show graph after recording completes
+    setTimeout(() => {
+      setShowGraph(true);
+    }, 500); // Small delay to ensure data is processed
   };
 
   const startCamera = async () => {
@@ -656,6 +716,15 @@ function App() {
     setError('Video playback error occurred.');
   };
 
+  const getFocusModeLabel = () => {
+    switch (focusMode) {
+      case 'both': return 'Both Eyes';
+      case 'left': return 'Left Eye Only';
+      case 'right': return 'Right Eye Only';
+      default: return 'Both Eyes';
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black text-white">
       {/* Header */}
@@ -664,7 +733,7 @@ function App() {
           <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
           <div>
             <h1 className="text-base font-bold">Pupil Tracker</h1>
-            <p className="text-xs text-gray-400">{deviceInfo}</p>
+            <p className="text-xs text-gray-400">{deviceInfo} • {getFocusModeLabel()}</p>
           </div>
         </div>
         <div className="flex items-center space-x-2">
@@ -680,6 +749,47 @@ function App() {
 
       {/* Main Content */}
       <div className="p-4 space-y-6">
+        {/* Focus Mode Selector */}
+        {isStreamActive && (
+          <div className="flex justify-center">
+            <div className="bg-gray-900 rounded-xl p-1 flex space-x-1">
+              <button
+                onClick={() => setFocusMode('both')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  focusMode === 'both' 
+                    ? 'bg-blue-600 text-white' 
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }`}
+              >
+                <Eye size={16} />
+                <span>Both Eyes</span>
+              </button>
+              <button
+                onClick={() => setFocusMode('left')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  focusMode === 'left' 
+                    ? 'bg-cyan-600 text-white' 
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }`}
+              >
+                <div className="w-4 h-4 border-2 border-current rounded-full"></div>
+                <span>Left Only</span>
+              </button>
+              <button
+                onClick={() => setFocusMode('right')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  focusMode === 'right' 
+                    ? 'bg-yellow-600 text-white' 
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }`}
+              >
+                <div className="w-4 h-4 border-2 border-current rounded-full"></div>
+                <span>Right Only</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Video Viewer */}
         <div className="relative w-full max-w-2xl mx-auto aspect-video bg-gray-900 rounded-2xl overflow-hidden shadow-2xl">
           <video
@@ -730,14 +840,21 @@ function App() {
             {currentPupilData && isStreamActive && (
               <div className="absolute top-4 left-4">
                 <div className="bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg text-xs backdrop-blur-sm">
-                  <div className="flex items-center space-x-2 mb-1">
-                    <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
-                    <span>Left: {currentPupilData.left.size.toFixed(1)}px</span>
+                  <div className="text-xs text-gray-300 mb-2">
+                    Tracking: {getFocusModeLabel()}
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
-                    <span>Right: {currentPupilData.right.size.toFixed(1)}px</span>
-                  </div>
+                  {(focusMode === 'both' || focusMode === 'left') && (
+                    <div className="flex items-center space-x-2 mb-1">
+                      <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
+                      <span>Left: {currentPupilData.left?.size?.toFixed(1) || '0'}px</span>
+                    </div>
+                  )}
+                  {(focusMode === 'both' || focusMode === 'right') && (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                      <span>Right: {currentPupilData.right?.size?.toFixed(1) || '0'}px</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -832,7 +949,7 @@ function App() {
                   className="flex items-center space-x-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-xl transition-all active:scale-95 font-medium"
                 >
                   <Play size={18} />
-                  <span>Record 5s</span>
+                  <span>Record 5s ({getFocusModeLabel()})</span>
                 </button>
               ) : (
                 <button
@@ -844,23 +961,12 @@ function App() {
                 </button>
               )}
               
-              {recordingData.length > 0 && !isRecording && (
-                <button
-                  onClick={() => setShowGraph(!showGraph)}
-                  className="flex items-center space-x-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl transition-all active:scale-95 font-medium"
-                >
-                  <BarChart3 size={18} />
-                  <span>{showGraph ? 'Hide' : 'Show'} Graph</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
         {/* Graph Display */}
         {showGraph && recordingData.length > 0 && (
           <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto">
-            <h3 className="text-lg font-bold mb-4 text-center">Pupil Size Over Time</h3>
+            <h3 className="text-lg font-bold mb-4 text-center">
+              📈 Pupil Size Over Time - {getFocusModeLabel()}
+            </h3>
             <div className="relative h-64 bg-gray-800 rounded-lg p-4">
               <svg width="100%" height="100%" viewBox="0 0 400 200" className="overflow-visible">
                 {/* Grid lines */}
@@ -874,24 +980,28 @@ function App() {
                 {/* Data lines */}
                 {recordingData.length > 1 && (
                   <>
-                    {/* Left eye data */}
-                    <polyline
-                      fill="none"
-                      stroke="#00ffff"
-                      strokeWidth="3"
-                      points={recordingData.map((d, i) => 
-                        `${(d.time / 5) * 400},${200 - Math.min((d.left / 50) * 180, 180)}`
-                      ).join(' ')}
-                    />
-                    {/* Right eye data */}
-                    <polyline
-                      fill="none"
-                      stroke="#ffff00"
-                      strokeWidth="3"
-                      points={recordingData.map((d, i) => 
-                        `${(d.time / 5) * 400},${200 - Math.min((d.right / 50) * 180, 180)}`
-                      ).join(' ')}
-                    />
+                    {/* Left eye data - only if tracking left */}
+                    {(focusMode === 'both' || focusMode === 'left') && (
+                      <polyline
+                        fill="none"
+                        stroke="#00ffff"
+                        strokeWidth={focusMode === 'left' ? 4 : 3}
+                        points={recordingData.map((d, i) => 
+                          `${(d.time / 5) * 400},${200 - Math.min((d.left / 50) * 180, 180)}`
+                        ).join(' ')}
+                      />
+                    )}
+                    {/* Right eye data - only if tracking right */}
+                    {(focusMode === 'both' || focusMode === 'right') && (
+                      <polyline
+                        fill="none"
+                        stroke="#ffff00"
+                        strokeWidth={focusMode === 'right' ? 4 : 3}
+                        points={recordingData.map((d, i) => 
+                          `${(d.time / 5) * 400},${200 - Math.min((d.right / 50) * 180, 180)}`
+                        ).join(' ')}
+                      />
+                    )}
                   </>
                 )}
                 
@@ -900,41 +1010,230 @@ function App() {
                 <text x="320" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
               </svg>
             </div>
+            
+            {/* Legend - only show relevant eyes */}
             <div className="flex justify-center space-x-6 mt-2">
-              <div className="flex items-center space-x-2">
-                <div className="w-3 h-3 bg-cyan-400 rounded"></div>
-                <span className="text-sm text-gray-300">Left Eye</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-3 h-3 bg-yellow-400 rounded"></div>
-                <span className="text-sm text-gray-300">Right Eye</span>
+              {(focusMode === 'both' || focusMode === 'left') && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-cyan-400 rounded"></div>
+                  <span className="text-sm text-gray-300">Left Eye</span>
+                </div>
+              )}
+              {(focusMode === 'both' || focusMode === 'right') && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-yellow-400 rounded"></div>
+                  <span className="text-sm text-gray-300">Right Eye</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Debug Info - Show if no data was recorded */}
+        {!isRecording && recordingData.length === 0 && isStreamActive && (
+          <div className="bg-yellow-900 border border-yellow-600 rounded-xl p-4 max-w-2xl mx-auto">
+            <div className="flex items-start space-x-3">
+              <AlertCircle size={20} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <h4 className="font-medium text-yellow-400 mb-2">No Recording Data</h4>
+                <p className="text-sm text-yellow-100 mb-2">
+                  If you just completed a recording but don't see results, try:
+                </p>
+                <ul className="text-sm text-yellow-100 space-y-1 list-disc list-inside">
+                  <li>Make sure your face is well-lit and clearly visible</li>
+                  <li>Position yourself so both eyes are in the camera view</li>
+                  <li>Wait for both OpenCV ✓ and MediaPipe ✓ to be ready</li>
+                  <li>Try recording again with better lighting</li>
+                </ul>
+                <p className="text-xs text-yellow-200 mt-2">
+                  Debug: Check browser console (F12) for detailed error messages
+                </p>
               </div>
             </div>
+          </div>
+        )}
+            </div>
+          )}
+        </div>
+
+        {/* Results Section - Always visible after recording */}
+        {!isRecording && recordingData.length > 0 && (
+          <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto border-2 border-green-600">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-green-400">
+                📊 Recording Results - {getFocusModeLabel()}
+              </h3>
+              <button
+                onClick={() => setShowGraph(!showGraph)}
+                className="flex items-center space-x-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-all active:scale-95 font-medium text-sm"
+              >
+                <BarChart3 size={16} />
+                <span>{showGraph ? 'Hide Graph' : 'Show Graph'}</span>
+              </button>
+            </div>
+
+            {/* Quick Stats */}
+            <div className={`grid ${focusMode === 'both' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 mb-4`}>
+              {(focusMode === 'both' || focusMode === 'left') && (
+                <div className="bg-gray-800 rounded-lg p-4 text-center border border-cyan-500">
+                  <div className="flex items-center justify-center space-x-2 mb-2">
+                    <div className="w-3 h-3 bg-cyan-400 rounded-full"></div>
+                    <span className="text-sm font-medium text-cyan-400">Left Eye</span>
+                  </div>
+                  <p className="text-2xl font-bold text-cyan-400">
+                    {recordingData.length > 0 ? 
+                      (recordingData.reduce((sum, d) => sum + (d.left || 0), 0) / recordingData.length).toFixed(1) 
+                      : '0'}px
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">Average Size</p>
+                </div>
+              )}
+              {(focusMode === 'both' || focusMode === 'right') && (
+                <div className="bg-gray-800 rounded-lg p-4 text-center border border-yellow-500">
+                  <div className="flex items-center justify-center space-x-2 mb-2">
+                    <div className="w-3 h-3 bg-yellow-400 rounded-full"></div>
+                    <span className="text-sm font-medium text-yellow-400">Right Eye</span>
+                  </div>
+                  <p className="text-2xl font-bold text-yellow-400">
+                    {recordingData.length > 0 ? 
+                      (recordingData.reduce((sum, d) => sum + (d.right || 0), 0) / recordingData.length).toFixed(1) 
+                      : '0'}px
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">Average Size</p>
+                </div>
+              )}
+            </div>
+
+            {/* Recording Summary */}
+            <div className="bg-gray-800 rounded-lg p-3 mb-4">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-lg font-bold text-green-400">{recordingData.length}</p>
+                  <p className="text-xs text-gray-400">Data Points</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-blue-400">
+                    {recordingData.length > 0 ? recordingData[recordingData.length - 1].time.toFixed(1) : 0}s
+                  </p>
+                  <p className="text-xs text-gray-400">Duration</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-purple-400">
+                    {recordingData.length > 0 ? (recordingData.length / 5).toFixed(1) : 0}/s
+                  </p>
+                  <p className="text-xs text-gray-400">Sample Rate</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Graph Toggle Hint */}
+            {!showGraph && (
+              <div className="text-center">
+                <p className="text-sm text-gray-400 mb-2">
+                  🎯 Click "Show Graph" above to visualize pupil size changes over time
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Graph Display */}
+        {showGraph && recordingData.length > 0 && (
+          <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto">
+            <h3 className="text-lg font-bold mb-4 text-center">
+              Pupil Size Over Time - {getFocusModeLabel()}
+            </h3>
+            <div className="relative h-64 bg-gray-800 rounded-lg p-4">
+              <svg width="100%" height="100%" viewBox="0 0 400 200" className="overflow-visible">
+                {/* Grid lines */}
+                <defs>
+                  <pattern id="grid" width="40" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 20" fill="none" stroke="#374151" strokeWidth="1"/>
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+                
+                {/* Data lines */}
+                {recordingData.length > 1 && (
+                  <>
+                    {/* Left eye data - only if tracking left */}
+                    {(focusMode === 'both' || focusMode === 'left') && (
+                      <polyline
+                        fill="none"
+                        stroke="#00ffff"
+                        strokeWidth={focusMode === 'left' ? 4 : 3}
+                        points={recordingData.map((d, i) => 
+                          `${(d.time / 5) * 400},${200 - Math.min((d.left / 50) * 180, 180)}`
+                        ).join(' ')}
+                      />
+                    )}
+                    {/* Right eye data - only if tracking right */}
+                    {(focusMode === 'both' || focusMode === 'right') && (
+                      <polyline
+                        fill="none"
+                        stroke="#ffff00"
+                        strokeWidth={focusMode === 'right' ? 4 : 3}
+                        points={recordingData.map((d, i) => 
+                          `${(d.time / 5) * 400},${200 - Math.min((d.right / 50) * 180, 180)}`
+                        ).join(' ')}
+                      />
+                    )}
+                  </>
+                )}
+                
+                {/* Labels */}
+                <text x="10" y="15" fill="#9ca3af" fontSize="12">Pupil Size (px)</text>
+                <text x="320" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
+              </svg>
+            </div>
             
-            {/* Stats */}
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div className="bg-gray-800 rounded-lg p-3 text-center">
-                <p className="text-xs text-gray-400">Left Eye Avg</p>
-                <p className="text-lg font-bold text-cyan-400">
-                  {recordingData.length > 0 ? 
-                    (recordingData.reduce((sum, d) => sum + d.left, 0) / recordingData.length).toFixed(1) 
-                    : '0'} px
-                </p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-3 text-center">
-                <p className="text-xs text-gray-400">Right Eye Avg</p>
-                <p className="text-lg font-bold text-yellow-400">
-                  {recordingData.length > 0 ? 
-                    (recordingData.reduce((sum, d) => sum + d.right, 0) / recordingData.length).toFixed(1) 
-                    : '0'} px
-                </p>
-              </div>
+            {/* Legend - only show relevant eyes */}
+            <div className="flex justify-center space-x-6 mt-2">
+              {(focusMode === 'both' || focusMode === 'left') && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-cyan-400 rounded"></div>
+                  <span className="text-sm text-gray-300">Left Eye</span>
+                </div>
+              )}
+              {(focusMode === 'both' || focusMode === 'right') && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-yellow-400 rounded"></div>
+                  <span className="text-sm text-gray-300">Right Eye</span>
+                </div>
+              )}
+            </div>
+            
+            {/* Stats - only show relevant eyes */}
+            <div className={`grid ${focusMode === 'both' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 mt-4`}>
+              {(focusMode === 'both' || focusMode === 'left') && (
+                <div className="bg-gray-800 rounded-lg p-3 text-center">
+                  <p className="text-xs text-gray-400">Left Eye Avg</p>
+                  <p className="text-lg font-bold text-cyan-400">
+                    {recordingData.length > 0 ? 
+                      (recordingData.reduce((sum, d) => sum + (d.left || 0), 0) / recordingData.length).toFixed(1) 
+                      : '0'} px
+                  </p>
+                </div>
+              )}
+              {(focusMode === 'both' || focusMode === 'right') && (
+                <div className="bg-gray-800 rounded-lg p-3 text-center">
+                  <p className="text-xs text-gray-400">Right Eye Avg</p>
+                  <p className="text-lg font-bold text-yellow-400">
+                    {recordingData.length > 0 ? 
+                      (recordingData.reduce((sum, d) => sum + (d.right || 0), 0) / recordingData.length).toFixed(1) 
+                      : '0'} px
+                  </p>
+                </div>
+              )}
             </div>
             
             {/* Data points info */}
             <div className="mt-4 text-center">
               <p className="text-xs text-gray-400">
                 Recorded {recordingData.length} data points over {recordingData.length > 0 ? recordingData[recordingData.length - 1].time.toFixed(1) : 0}s
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Focus Mode: {getFocusModeLabel()}
               </p>
             </div>
           </div>
