@@ -15,6 +15,7 @@ function App() {
   const [recordingData, setRecordingData] = useState([]);
   const [recordingTime, setRecordingTime] = useState(0);
   const [showGraph, setShowGraph] = useState(false);
+  const [currentPupilData, setCurrentPupilData] = useState(null);
   
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -60,7 +61,6 @@ function App() {
       script.async = true;
       script.onload = () => {
         console.log('OpenCV script loaded, waiting for cv to be ready...');
-        // OpenCV needs time to initialize
         const checkCV = () => {
           if (window.cv && window.cv.Mat) {
             console.log('OpenCV is ready!');
@@ -148,112 +148,151 @@ function App() {
     initializeMediaPipe();
   }, [isMediaPipeLoaded]);
 
-  // Pupil detection using OpenCV
+  // Improved pupil detection using OpenCV
   const detectPupils = useCallback((landmarks) => {
-    if (!window.cv || !videoRef.current || !landmarks) return null;
+    if (!window.cv || !videoRef.current || !landmarks) {
+      console.log('OpenCV not ready or no landmarks');
+      return null;
+    }
 
     try {
       const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
       
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Create a temporary canvas to capture video frame
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCanvas.width = video.videoWidth;
+      tempCanvas.height = video.videoHeight;
       
-      // Draw current video frame to canvas
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Draw current video frame
+      tempCtx.drawImage(video, 0, 0);
       
       // Get image data
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const src = window.cv.matFromImageData(imageData);
       
       // Convert to grayscale
       const gray = new window.cv.Mat();
       window.cv.cvtColor(src, gray, window.cv.COLOR_RGBA2GRAY);
       
-      // Get eye regions from landmarks
-      const leftEyeRegion = getEyeRegion(landmarks, 'left', canvas.width, canvas.height);
-      const rightEyeRegion = getEyeRegion(landmarks, 'right', canvas.width, canvas.height);
-      
-      const leftPupilSize = measurePupilInRegion(gray, leftEyeRegion);
-      const rightPupilSize = measurePupilInRegion(gray, rightEyeRegion);
+      // Get eye regions from MediaPipe landmarks
+      const leftEyeData = getEyeRegionAndPupil(gray, landmarks, 'left', tempCanvas.width, tempCanvas.height);
+      const rightEyeData = getEyeRegionAndPupil(gray, landmarks, 'right', tempCanvas.width, tempCanvas.height);
       
       // Cleanup
       src.delete();
       gray.delete();
       
-      return {
-        left: leftPupilSize,
-        right: rightPupilSize,
+      const result = {
+        left: leftEyeData,
+        right: rightEyeData,
         timestamp: Date.now()
       };
+      
+      console.log('Pupil detection result:', result);
+      return result;
+      
     } catch (error) {
-      console.warn('Pupil detection error:', error);
+      console.error('Pupil detection error:', error);
       return null;
     }
   }, []);
 
-  // Get eye region from landmarks
-  const getEyeRegion = (landmarks, eye, width, height) => {
-    // Eye landmark indices
-    const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
-    const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
-    
-    const indices = eye === 'left' ? leftEyeIndices : rightEyeIndices;
-    
-    let minX = width, minY = height, maxX = 0, maxY = 0;
-    
-    indices.forEach(index => {
-      const point = landmarks[index];
-      const x = point.x * width;
-      const y = point.y * height;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-    });
-    
-    // Add padding
-    const padding = 10;
-    return {
-      x: Math.max(0, minX - padding),
-      y: Math.max(0, minY - padding),
-      width: Math.min(width - minX + padding, maxX - minX + 2 * padding),
-      height: Math.min(height - minY + padding, maxY - minY + 2 * padding)
-    };
-  };
-
-  // Measure pupil size in eye region
-  const measurePupilInRegion = (grayMat, region) => {
+  // Enhanced eye region extraction and pupil detection
+  const getEyeRegionAndPupil = (grayMat, landmarks, eye, width, height) => {
     try {
-      // Extract eye region
-      const eyeROI = grayMat.roi(new window.cv.Rect(region.x, region.y, region.width, region.height));
+      // More precise eye landmark indices for better eye region
+      const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+      const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
       
-      // Apply Gaussian blur
+      const indices = eye === 'left' ? leftEyeIndices : rightEyeIndices;
+      
+      // Calculate bounding box of eye region
+      let minX = width, minY = height, maxX = 0, maxY = 0;
+      
+      indices.forEach(index => {
+        if (landmarks[index]) {
+          const point = landmarks[index];
+          const x = point.x * width;
+          const y = point.y * height;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      });
+      
+      // Add padding and ensure bounds
+      const padding = 15;
+      const eyeRegion = {
+        x: Math.max(0, Math.floor(minX - padding)),
+        y: Math.max(0, Math.floor(minY - padding)),
+        width: Math.min(width - Math.floor(minX - padding), Math.floor(maxX - minX + 2 * padding)),
+        height: Math.min(height - Math.floor(minY - padding), Math.floor(maxY - minY + 2 * padding))
+      };
+      
+      // Ensure minimum size
+      if (eyeRegion.width < 30 || eyeRegion.height < 20) {
+        console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
+        return { size: 0, center: null, region: eyeRegion };
+      }
+      
+      // Extract eye region
+      const eyeROI = grayMat.roi(new window.cv.Rect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height));
+      
+      // Apply Gaussian blur to reduce noise
       const blurred = new window.cv.Mat();
       window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
       
-      // Apply threshold to find dark regions (pupil)
+      // Apply adaptive threshold to find dark regions (pupil)
       const thresh = new window.cv.Mat();
-      window.cv.threshold(blurred, thresh, 50, 255, window.cv.THRESH_BINARY_INV);
+      window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
+      
+      // Morphological operations to clean up the image
+      const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(3, 3));
+      const morphed = new window.cv.Mat();
+      window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
       
       // Find contours
       const contours = new window.cv.MatVector();
       const hierarchy = new window.cv.Mat();
-      window.cv.findContours(thresh, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+      window.cv.findContours(morphed, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
       
-      let maxArea = 0;
-      let pupilRadius = 0;
+      let bestPupil = { size: 0, center: null };
+      let maxScore = 0;
       
-      // Find largest contour (likely the pupil)
+      // Find the best pupil candidate
       for (let i = 0; i < contours.size(); i++) {
         const contour = contours.get(i);
         const area = window.cv.contourArea(contour);
         
-        if (area > maxArea && area > 100) { // Filter small noise
-          maxArea = area;
-          // Estimate radius from area
-          pupilRadius = Math.sqrt(area / Math.PI);
+        // Filter by area (pupil should be reasonably sized)
+        if (area > 50 && area < 2000) {
+          // Get contour properties
+          const moments = window.cv.moments(contour);
+          const perimeter = window.cv.arcLength(contour, true);
+          const circularity = 4 * Math.PI * area / (perimeter * perimeter);
+          
+          // Calculate center
+          let centerX = 0, centerY = 0;
+          if (moments.m00 !== 0) {
+            centerX = moments.m10 / moments.m00;
+            centerY = moments.m01 / moments.m00;
+          }
+          
+          // Score based on area, circularity, and position
+          const score = area * circularity;
+          
+          if (score > maxScore && circularity > 0.3) {
+            maxScore = score;
+            bestPupil = {
+              size: Math.sqrt(area / Math.PI) * 2, // Diameter from area
+              center: {
+                x: eyeRegion.x + centerX,
+                y: eyeRegion.y + centerY
+              }
+            };
+          }
         }
       }
       
@@ -261,17 +300,24 @@ function App() {
       eyeROI.delete();
       blurred.delete();
       thresh.delete();
+      kernel.delete();
+      morphed.delete();
       contours.delete();
       hierarchy.delete();
       
-      return pupilRadius;
+      return {
+        size: bestPupil.size,
+        center: bestPupil.center,
+        region: eyeRegion
+      };
+      
     } catch (error) {
-      console.warn('Pupil measurement error:', error);
-      return 0;
+      console.error(`Error processing ${eye} eye:`, error);
+      return { size: 0, center: null, region: null };
     }
   };
 
-  // MediaPipe results handler
+  // MediaPipe results handler with improved pupil detection
   const onFaceMeshResults = useCallback((results) => {
     if (!canvasRef.current || !videoRef.current) return;
 
@@ -287,18 +333,87 @@ function App() {
 
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
+      
+      // Draw iris landmarks
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
-      // Detect pupils if OpenCV is loaded and recording
-      if (isOpenCVLoaded && isRecording) {
+      // Detect pupils if OpenCV is loaded
+      if (isOpenCVLoaded) {
         const pupilData = detectPupils(landmarks);
         if (pupilData) {
-          const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
-          setRecordingData(prev => [...prev, { ...pupilData, time: timeElapsed }]);
+          setCurrentPupilData(pupilData);
+          
+          // Draw pupil overlays
+          drawPupilOverlays(ctx, pupilData, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+          
+          // Record data if recording
+          if (isRecording) {
+            const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
+            const dataPoint = {
+              time: timeElapsed,
+              left: pupilData.left.size,
+              right: pupilData.right.size,
+              timestamp: pupilData.timestamp
+            };
+            
+            setRecordingData(prev => {
+              const newData = [...prev, dataPoint];
+              console.log('Recording data point:', dataPoint, 'Total points:', newData.length);
+              return newData;
+            });
+          }
         }
       }
     }
   }, [isOpenCVLoaded, isRecording, detectPupils]);
+
+  // Draw pupil overlays on canvas
+  const drawPupilOverlays = (ctx, pupilData, videoWidth, videoHeight, canvasWidth, canvasHeight) => {
+    const scaleX = canvasWidth / videoWidth;
+    const scaleY = canvasHeight / videoHeight;
+    
+    // Draw left pupil
+    if (pupilData.left.center && pupilData.left.size > 0) {
+      const leftX = pupilData.left.center.x * scaleX;
+      const leftY = pupilData.left.center.y * scaleY;
+      const leftRadius = (pupilData.left.size / 2) * Math.min(scaleX, scaleY);
+      
+      ctx.strokeStyle = '#00ffff';
+      ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+      ctx.beginPath();
+      ctx.arc(leftX, leftY, leftRadius, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw center dot
+      ctx.fillStyle = '#00ffff';
+      ctx.beginPath();
+      ctx.arc(leftX, leftY, 2, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    
+    // Draw right pupil
+    if (pupilData.right.center && pupilData.right.size > 0) {
+      const rightX = pupilData.right.center.x * scaleX;
+      const rightY = pupilData.right.center.y * scaleY;
+      const rightRadius = (pupilData.right.size / 2) * Math.min(scaleX, scaleY);
+      
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.2)';
+      ctx.beginPath();
+      ctx.arc(rightX, rightY, rightRadius, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw center dot
+      ctx.fillStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.arc(rightX, rightY, 2, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  };
 
   // Draw iris landmarks
   const drawIrisLandmarks = (ctx, landmarks, width, height) => {
@@ -307,7 +422,7 @@ function App() {
 
     // Draw left iris
     ctx.strokeStyle = '#00ff00';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
     
     ctx.beginPath();
@@ -348,13 +463,13 @@ function App() {
     ctx.fillStyle = '#00ff00';
     const leftCenter = landmarks[468];
     ctx.beginPath();
-    ctx.arc(leftCenter.x * width, leftCenter.y * height, 4, 0, 2 * Math.PI);
+    ctx.arc(leftCenter.x * width, leftCenter.y * height, 3, 0, 2 * Math.PI);
     ctx.fill();
 
     ctx.fillStyle = '#ff0000';
     const rightCenter = landmarks[473];
     ctx.beginPath();
-    ctx.arc(rightCenter.x * width, rightCenter.y * height, 4, 0, 2 * Math.PI);
+    ctx.arc(rightCenter.x * width, rightCenter.y * height, 3, 0, 2 * Math.PI);
     ctx.fill();
   };
 
@@ -423,11 +538,18 @@ function App() {
       setError('OpenCV not loaded yet. Please wait.');
       return;
     }
+    if (!isMediaPipeInitialized) {
+      setError('MediaPipe not initialized yet. Please wait.');
+      return;
+    }
+    console.log('Starting recording...');
     setIsRecording(true);
     setShowGraph(false);
+    setRecordingData([]);
   };
 
   const stopRecording = () => {
+    console.log('Stopping recording...');
     setIsRecording(false);
     setShowGraph(true);
   };
@@ -604,9 +726,25 @@ function App() {
               </div>
             )}
             
+            {/* Real-time pupil size display */}
+            {currentPupilData && isStreamActive && (
+              <div className="absolute top-4 left-4">
+                <div className="bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg text-xs backdrop-blur-sm">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
+                    <span>Left: {currentPupilData.left.size.toFixed(1)}px</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                    <span>Right: {currentPupilData.right.size.toFixed(1)}px</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* Recording indicator */}
             {isRecording && (
-              <div className="absolute top-4 left-4">
+              <div className="absolute top-4 right-4">
                 <div className="bg-red-600 text-white px-3 py-1 rounded-full flex items-center space-x-2">
                   <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                   <span className="text-sm font-medium">REC {recordingTime.toFixed(1)}s</span>
@@ -620,7 +758,7 @@ function App() {
                 <div className="text-white text-xs bg-black bg-opacity-60 px-3 py-1 rounded-full backdrop-blur-sm flex items-center space-x-2">
                   <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
                   <span>
-                    Ready - OpenCV: {isOpenCVLoaded ? '✓' : '⏳'} MediaPipe: {isMediaPipeInitialized ? '✓' : '⏳'}
+                    OpenCV: {isOpenCVLoaded ? '✓' : '⏳'} MediaPipe: {isMediaPipeInitialized ? '✓' : '⏳'}
                   </span>
                 </div>
               </div>
@@ -628,7 +766,7 @@ function App() {
             
             {/* Zoom indicator */}
             {zoom !== 1 && (
-              <div className="absolute top-4 right-4">
+              <div className="absolute bottom-4 right-4">
                 <div className="text-white text-xs bg-black bg-opacity-60 px-2 py-1 rounded backdrop-blur-sm">
                   {zoom.toFixed(1)}x
                 </div>
@@ -678,7 +816,7 @@ function App() {
               <span>{isLoading ? 'Starting...' : 'Start Pupil Tracking'}</span>
             </button>
           ) : (
-            <div className="flex space-x-4">
+            <div className="flex flex-wrap justify-center gap-4">
               <button
                 onClick={stopCamera}
                 className="flex items-center space-x-2 px-6 py-3 bg-red-600 hover:bg-red-700 rounded-xl transition-all active:scale-95 font-medium"
@@ -739,36 +877,36 @@ function App() {
                     {/* Left eye data */}
                     <polyline
                       fill="none"
-                      stroke="#00ff00"
-                      strokeWidth="2"
+                      stroke="#00ffff"
+                      strokeWidth="3"
                       points={recordingData.map((d, i) => 
-                        `${(d.time / 5) * 400},${200 - (d.left / 20) * 180}`
+                        `${(d.time / 5) * 400},${200 - Math.min((d.left / 50) * 180, 180)}`
                       ).join(' ')}
                     />
                     {/* Right eye data */}
                     <polyline
                       fill="none"
-                      stroke="#ff0000"
-                      strokeWidth="2"
+                      stroke="#ffff00"
+                      strokeWidth="3"
                       points={recordingData.map((d, i) => 
-                        `${(d.time / 5) * 400},${200 - (d.right / 20) * 180}`
+                        `${(d.time / 5) * 400},${200 - Math.min((d.right / 50) * 180, 180)}`
                       ).join(' ')}
                     />
                   </>
                 )}
                 
                 {/* Labels */}
-                <text x="10" y="15" fill="#9ca3af" fontSize="12">Pupil Size</text>
-                <text x="350" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
+                <text x="10" y="15" fill="#9ca3af" fontSize="12">Pupil Size (px)</text>
+                <text x="320" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
               </svg>
             </div>
             <div className="flex justify-center space-x-6 mt-2">
               <div className="flex items-center space-x-2">
-                <div className="w-3 h-3 bg-green-500 rounded"></div>
+                <div className="w-3 h-3 bg-cyan-400 rounded"></div>
                 <span className="text-sm text-gray-300">Left Eye</span>
               </div>
               <div className="flex items-center space-x-2">
-                <div className="w-3 h-3 bg-red-500 rounded"></div>
+                <div className="w-3 h-3 bg-yellow-400 rounded"></div>
                 <span className="text-sm text-gray-300">Right Eye</span>
               </div>
             </div>
@@ -777,7 +915,7 @@ function App() {
             <div className="grid grid-cols-2 gap-4 mt-4">
               <div className="bg-gray-800 rounded-lg p-3 text-center">
                 <p className="text-xs text-gray-400">Left Eye Avg</p>
-                <p className="text-lg font-bold text-green-400">
+                <p className="text-lg font-bold text-cyan-400">
                   {recordingData.length > 0 ? 
                     (recordingData.reduce((sum, d) => sum + d.left, 0) / recordingData.length).toFixed(1) 
                     : '0'} px
@@ -785,12 +923,19 @@ function App() {
               </div>
               <div className="bg-gray-800 rounded-lg p-3 text-center">
                 <p className="text-xs text-gray-400">Right Eye Avg</p>
-                <p className="text-lg font-bold text-red-400">
+                <p className="text-lg font-bold text-yellow-400">
                   {recordingData.length > 0 ? 
                     (recordingData.reduce((sum, d) => sum + d.right, 0) / recordingData.length).toFixed(1) 
                     : '0'} px
                 </p>
               </div>
+            </div>
+            
+            {/* Data points info */}
+            <div className="mt-4 text-center">
+              <p className="text-xs text-gray-400">
+                Recorded {recordingData.length} data points over {recordingData.length > 0 ? recordingData[recordingData.length - 1].time.toFixed(1) : 0}s
+              </p>
             </div>
           </div>
         )}
