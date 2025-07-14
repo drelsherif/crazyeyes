@@ -58,42 +58,65 @@ function App() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('Stream obtained:', stream);
       console.log('Video tracks:', stream.getVideoTracks());
+      console.log('Stream active:', stream.active);
       
       if (videoRef.current && stream) {
-        console.log('Setting video source...');
+        console.log('Video element exists:', !!videoRef.current);
+        console.log('Video element dimensions:', videoRef.current.offsetWidth, videoRef.current.offsetHeight);
         
-        // Clear any existing source
-        videoRef.current.srcObject = null;
+        // Force a re-render by updating state first
+        setIsStreamActive(true);
         
-        // Wait a moment then set the new stream
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for React to update
+        await new Promise(resolve => setTimeout(resolve, 50));
         
+        // Now set the video source
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
         
-        // Set video attributes for Safari/mobile optimization
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        videoRef.current.setAttribute('muted', 'true');
-        videoRef.current.setAttribute('autoplay', 'true');
+        // Set video attributes
+        videoRef.current.muted = true;
+        videoRef.current.playsInline = true;
+        videoRef.current.autoplay = true;
         
-        // Wait for video to load and play
-        const playPromise = videoRef.current.play();
-        if (playPromise !== undefined) {
-          await playPromise;
+        // Force video to load and play
+        videoRef.current.load();
+        
+        // Wait for loadedmetadata event
+        await new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => reject(new Error('Video load timeout')), 10000);
+          
+          videoRef.current.onloadedmetadata = () => {
+            clearTimeout(timeoutId);
+            console.log('Video metadata loaded, dimensions:', videoRef.current.videoWidth, videoRef.current.videoHeight);
+            resolve();
+          };
+          
+          videoRef.current.onerror = (e) => {
+            clearTimeout(timeoutId);
+            reject(new Error('Video load error: ' + e.message));
+          };
+        });
+        
+        // Now try to play
+        try {
+          await videoRef.current.play();
+          console.log('Video is now playing');
+        } catch (playError) {
+          console.warn('Auto-play failed, but video should still work:', playError);
         }
         
-        // Additional Safari-specific optimizations
-        videoRef.current.style.objectFit = 'cover';
+        // Set transform after everything is loaded
         videoRef.current.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
         
-        console.log('Video should be playing now');
-        setIsStreamActive(true);
+        console.log('Video setup complete');
       } else {
         throw new Error('Video element not available or stream is null');
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
+      setIsStreamActive(false); // Reset state on error
+      
       let errorMessage = 'Failed to access camera. ';
       
       if (err.name === 'NotAllowedError') {
@@ -234,6 +257,26 @@ function App() {
               <span>Stop Camera</span>
             </button>
           )}
+          
+          {/* Debug button */}
+          <button
+            onClick={() => {
+              console.log('=== DEBUG INFO ===');
+              console.log('Video element:', videoRef.current);
+              console.log('Video srcObject:', videoRef.current?.srcObject);
+              console.log('Stream:', streamRef.current);
+              console.log('Stream active:', streamRef.current?.active);
+              console.log('Video paused:', videoRef.current?.paused);
+              console.log('Video ready state:', videoRef.current?.readyState);
+              console.log('Video dimensions:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight);
+              console.log('Video element size:', videoRef.current?.offsetWidth, 'x', videoRef.current?.offsetHeight);
+              console.log('isStreamActive:', isStreamActive);
+              console.log('==================');
+            }}
+            className="px-4 py-3 bg-gray-600 hover:bg-gray-500 rounded-xl transition-all active:scale-95 text-sm"
+          >
+            Debug
+          </button>
         </div>
       </div>
 
