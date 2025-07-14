@@ -149,45 +149,75 @@ function App() {
     initializeMediaPipe();
   }, [isMediaPipeLoaded]);
 
+  // Helper to calculate bounding circle for iris landmarks
+  const getIrisBoundingCircle = (landmarks, indices, width, height) => {
+    if (!landmarks || indices.length === 0) return null;
+
+    let sumX = 0, sumY = 0;
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    let validPoints = 0;
+
+    indices.forEach(index => {
+      const point = landmarks[index];
+      if (point) {
+        const x = point.x * width;
+        const y = point.y * height;
+        sumX += x;
+        sumY += y;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        validPoints++;
+      }
+    });
+
+    if (validPoints === 0) return null;
+
+    const centerX = sumX / validPoints;
+    const centerY = sumY / validPoints;
+    
+    // Calculate radius based on the furthest point from the center
+    let maxDistance = 0;
+    indices.forEach(index => {
+      const point = landmarks[index];
+      if (point) {
+        const x = point.x * width;
+        const y = point.y * height;
+        const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+        maxDistance = Math.max(maxDistance, dist);
+      }
+    });
+
+    // Add a small buffer to the radius
+    const radius = maxDistance + 2; 
+
+    return { centerX, centerY, radius };
+  };
+
   // Enhanced eye region extraction with focus mode optimization
   const getEyeRegionAndPupil = useCallback((grayMat, landmarks, eye, width, height) => {
     try {
       // MediaPipe Iris Landmarks
-      // Left Iris: 468, 469, 470, 471, 472
-      // Right Iris: 473, 474, 475, 476, 477
       const irisIndices = eye === 'left' ? [468, 469, 470, 471, 472] : [473, 474, 475, 476, 477];
       
-      let minX = width, minY = height, maxX = 0, maxY = 0;
-      let validIrisPoints = 0;
+      const irisCircle = getIrisBoundingCircle(landmarks, irisIndices, width, height);
 
-      irisIndices.forEach(index => {
-        const point = landmarks[index];
-        if (point) { // Ensure the landmark exists
-          const x = point.x * width;
-          const y = point.y * height;
-          minX = Math.min(minX, x);
-          minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x);
-          maxY = Math.max(maxY, y);
-          validIrisPoints++;
-        }
-      });
-
-      if (validIrisPoints === 0) {
-        console.log(`No valid iris landmarks found for ${eye} eye.`);
+      if (!irisCircle) {
+        console.log(`No valid iris circle found for ${eye} eye.`);
         return { size: 0, center: null, region: null };
       }
-      
-      // Add a small padding around the detected iris region
-      const padding = focusMode === eye ? 15 : 10; // Slightly less padding needed with precise iris ROI
+
+      // Define ROI based on the iris bounding circle
+      const padding = focusMode === eye ? 5 : 3; // Minimal padding as iris circle is precise
       const eyeRegion = {
-        x: Math.max(0, Math.floor(minX - padding)),
-        y: Math.max(0, Math.floor(minY - padding)),
-        width: Math.min(width - Math.floor(minX - padding), Math.floor(maxX - minX + 2 * padding)),
-        height: Math.min(height - Math.floor(minY - padding), Math.floor(maxY - minY + 2 * padding))
+        x: Math.max(0, Math.floor(irisCircle.centerX - irisCircle.radius - padding)),
+        y: Math.max(0, Math.floor(irisCircle.centerY - irisCircle.radius - padding)),
+        width: Math.min(width - Math.floor(irisCircle.centerX - irisCircle.radius - padding), Math.floor(irisCircle.radius * 2 + 2 * padding)),
+        height: Math.min(height - Math.floor(irisCircle.centerY - irisCircle.radius - padding), Math.floor(irisCircle.radius * 2 + 2 * padding))
       };
       
-      if (eyeRegion.width < 10 || eyeRegion.height < 10) { // Reduced minimum size, as iris is smaller
+      if (eyeRegion.width < 10 || eyeRegion.height < 10) { 
         console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
         return { size: 0, center: null, region: eyeRegion };
       }
@@ -199,11 +229,10 @@ function App() {
       window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(blurSize, blurSize), 0);
       
       const thresh = new window.cv.Mat();
-      // Adjust threshold based on the new, tighter ROI
-      const thresholdValue = focusMode === eye ? 35 : 40; // Potentially lower for darker pupil
+      const thresholdValue = focusMode === eye ? 30 : 35; // Lower threshold for darker pupil
       window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
       
-      const kernelSize = focusMode === eye ? 3 : 2; // Smaller kernel for precise features
+      const kernelSize = focusMode === eye ? 3 : 2; 
       const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
       let morphed = new window.cv.Mat(); 
       window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
@@ -222,9 +251,8 @@ function App() {
       let bestPupil = { size: 0, center: null };
       let maxScore = 0;
       
-      // Adjusted min/max area for a pupil within the iris region
-      const minArea = focusMode === eye ? 10 : 20; // Smaller min area
-      const maxArea = focusMode === eye ? 800 : 500; // Smaller max area, typical pupil won't be huge
+      const minArea = focusMode === eye ? 8 : 15; // Adjusted for smaller, more precise pupil
+      const maxArea = focusMode === eye ? 600 : 400; 
       
       for (let i = 0; i < contours.size(); i++) {
         const contour = contours.get(i);
@@ -233,7 +261,7 @@ function App() {
         if (area > minArea && area < maxArea) {
           const moments = window.cv.moments(contour);
           const perimeter = window.cv.arcLength(contour, true);
-          const circularity = perimeter === 0 ? 0 : 4 * Math.PI * area / (perimeter * perimeter); // Avoid division by zero
+          const circularity = perimeter === 0 ? 0 : 4 * Math.PI * area / (perimeter * perimeter); 
           
           let centerX = 0, centerY = 0;
           if (moments.m00 !== 0) {
@@ -246,7 +274,7 @@ function App() {
             score *= 1.5; 
           }
           
-          const minCircularity = focusMode === eye ? 0.3 : 0.4; // Require higher circularity
+          const minCircularity = focusMode === eye ? 0.4 : 0.5; // Stricter circularity
           if (score > maxScore && circularity > minCircularity) {
             maxScore = score;
             bestPupil = {
@@ -258,7 +286,7 @@ function App() {
             };
           }
         }
-        contour.delete(); // Delete contour after use
+        contour.delete(); 
       }
       
       // Cleanup
@@ -280,7 +308,7 @@ function App() {
       console.error(`Error processing ${eye} eye:`, error);
       return { size: 0, center: null, region: null };
     }
-  }, [focusMode]);
+  }, [focusMode, getIrisBoundingCircle]);
 
   // Enhanced pupil detection with focus mode support
   const detectPupils = useCallback((landmarks) => {
@@ -332,7 +360,7 @@ function App() {
       console.error('Pupil detection error:', error);
       return null;
     }
-  }, [focusMode, getEyeRegionAndPupil]); // Added getEyeRegionAndPupil dependency
+  }, [focusMode, getEyeRegionAndPupil]);
 
   // MediaPipe results handler
   const onFaceMeshResults = useCallback((results) => {
@@ -351,7 +379,7 @@ function App() {
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
       
-      // Draw iris landmarks based on focus mode
+      // Draw iris landmarks as circles
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
       // Detect pupils if OpenCV is loaded
@@ -391,10 +419,10 @@ function App() {
         }
       }
     }
-  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode]);
+  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode, drawIrisLandmarks, drawPupilOverlays]); // Added drawIrisLandmarks and drawPupilOverlays for completeness
 
   // Enhanced pupil overlay drawing with focus mode
-  const drawPupilOverlays = (ctx, pupilData, videoWidth, videoHeight, canvasWidth, canvasHeight) => {
+  const drawPupilOverlays = useCallback((ctx, pupilData, videoWidth, videoHeight, canvasWidth, canvasHeight) => {
     const scaleX = canvasWidth / videoWidth;
     const scaleY = canvasHeight / videoHeight;
     
@@ -466,80 +494,56 @@ function App() {
         ctx.stroke();
       }
     }
-  };
+  }, [focusMode]); // Only depends on focusMode
 
-  // Enhanced iris landmark drawing with focus mode
-  const drawIrisLandmarks = (ctx, landmarks, width, height) => {
-    const leftIris = [468, 469, 470, 471, 472];
-    const rightIris = [473, 474, 475, 476, 477];
+  // Enhanced iris landmark drawing with focus mode - now draws a circle
+  const drawIrisLandmarks = useCallback((ctx, landmarks, width, height) => {
+    const leftIrisIndices = [468, 469, 470, 471, 472];
+    const rightIrisIndices = [473, 474, 475, 476, 477];
 
-    // Draw left iris (dimmed if not focused)
+    // Draw left iris circle (dimmed if not focused)
     if (focusMode === 'both' || focusMode === 'left') {
-      const isLeftFocused = focusMode === 'left';
-      ctx.strokeStyle = isLeftFocused ? '#00ff00' : '#006600';
-      ctx.lineWidth = isLeftFocused ? 3 : 2;
-      ctx.fillStyle = isLeftFocused ? 'rgba(0, 255, 0, 0.15)' : 'rgba(0, 255, 0, 0.05)';
-      
-      ctx.beginPath();
-      leftIris.forEach((index, i) => {
-        const point = landmarks[index];
-        if (point) { // Check if landmark exists
-          const x = point.x * width;
-          const y = point.y * height;
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      // Center point
-      ctx.fillStyle = isLeftFocused ? '#00ff00' : '#006600';
-      const leftCenter = landmarks[468]; // Use a specific landmark for the center
-      if (leftCenter) {
+      const leftIrisCircle = getIrisBoundingCircle(landmarks, leftIrisIndices, width, height);
+      if (leftIrisCircle) {
+        const isLeftFocused = focusMode === 'left';
+        ctx.strokeStyle = isLeftFocused ? '#00ff00' : '#006600';
+        ctx.lineWidth = isLeftFocused ? 3 : 2;
+        ctx.fillStyle = isLeftFocused ? 'rgba(0, 255, 0, 0.15)' : 'rgba(0, 255, 0, 0.05)';
+        
         ctx.beginPath();
-        ctx.arc(leftCenter.x * width, leftCenter.y * height, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
+        ctx.arc(leftIrisCircle.centerX, leftIrisCircle.centerY, leftIrisCircle.radius, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+
+        // Center point
+        ctx.fillStyle = isLeftFocused ? '#00ff00' : '#006600';
+        ctx.beginPath();
+        ctx.arc(leftIrisCircle.centerX, leftIrisCircle.centerY, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
         ctx.fill();
       }
     }
 
-    // Draw right iris (dimmed if not focused)
+    // Draw right iris circle (dimmed if not focused)
     if (focusMode === 'both' || focusMode === 'right') {
-      const isRightFocused = focusMode === 'right';
-      ctx.strokeStyle = isRightFocused ? '#ff0000' : '#660000';
-      ctx.lineWidth = isRightFocused ? 3 : 2;
-      ctx.fillStyle = isRightFocused ? 'rgba(255, 0, 0, 0.15)' : 'rgba(255, 0, 0, 0.05)';
-      
-      ctx.beginPath();
-      rightIris.forEach((index, i) => {
-        const point = landmarks[index];
-        if (point) { // Check if landmark exists
-          const x = point.x * width;
-          const y = point.y * height;
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = isRightFocused ? '#ff0000' : '#660000';
-      const rightCenter = landmarks[473]; // Use a specific landmark for the center
-      if (rightCenter) {
+      const rightIrisCircle = getIrisBoundingCircle(landmarks, rightIrisIndices, width, height);
+      if (rightIrisCircle) {
+        const isRightFocused = focusMode === 'right';
+        ctx.strokeStyle = isRightFocused ? '#ff0000' : '#660000';
+        ctx.lineWidth = isRightFocused ? 3 : 2;
+        ctx.fillStyle = isRightFocused ? 'rgba(255, 0, 0, 0.15)' : 'rgba(255, 0, 0, 0.05)';
+        
         ctx.beginPath();
-        ctx.arc(rightCenter.x * width, rightCenter.y * height, isRightFocused ? 4 : 3, 0, 2 * Math.PI);
+        ctx.arc(rightIrisCircle.centerX, rightIrisCircle.centerY, rightIrisCircle.radius, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = isRightFocused ? '#ff0000' : '#660000';
+        ctx.beginPath();
+        ctx.arc(rightIrisCircle.centerX, rightIrisCircle.centerY, isRightFocused ? 4 : 3, 0, 2 * Math.PI);
         ctx.fill();
       }
     }
-  };
+  }, [focusMode, getIrisBoundingCircle]); // Added getIrisBoundingCircle dependency
 
   // Process video frame for MediaPipe
   const processFrame = useCallback(async () => {
@@ -718,6 +722,7 @@ function App() {
     setIsRecording(false);
     setShowGraph(false); // Hide graph when camera is stopped
     setRecordingData([]); // Clear recording data when camera is stopped
+    setCurrentPupilData(null); // Clear pupil debug data
   };
 
   const switchCamera = () => {
@@ -981,6 +986,47 @@ function App() {
           )}
         </div>
 
+        {/* Pupil Debug Display */}
+        {isStreamActive && currentPupilData && (
+          <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto border border-gray-700">
+            <h3 className="text-lg font-bold mb-4 text-center text-gray-300">
+              👁️ Pupil Debug Data
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              {(focusMode === 'both' || focusMode === 'left') && (
+                <div className="bg-gray-800 p-3 rounded-lg flex flex-col space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
+                    <span className="font-medium text-cyan-400">Left Eye:</span>
+                  </div>
+                  <p className="ml-4 text-gray-200">Size: {currentPupilData.left?.size?.toFixed(2) || 'N/A'} px</p>
+                  <p className="ml-4 text-gray-200">Center X: {currentPupilData.left?.center?.x?.toFixed(2) || 'N/A'}</p>
+                  <p className="ml-4 text-gray-200">Center Y: {currentPupilData.left?.center?.y?.toFixed(2) || 'N/A'}</p>
+                  <p className="ml-4 text-gray-500 text-xs">Region: x:{currentPupilData.left?.region?.x}, y:{currentPupilData.left?.region?.y}, w:{currentPupilData.left?.region?.width}, h:{currentPupilData.left?.region?.height}</p>
+                </div>
+              )}
+              {(focusMode === 'both' || focusMode === 'right') && (
+                <div className="bg-gray-800 p-3 rounded-lg flex flex-col space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                    <span className="font-medium text-yellow-400">Right Eye:</span>
+                  </div>
+                  <p className="ml-4 text-gray-200">Size: {currentPupilData.right?.size?.toFixed(2) || 'N/A'} px</p>
+                  <p className="ml-4 text-gray-200">Center X: {currentPupilData.right?.center?.x?.toFixed(2) || 'N/A'}</p>
+                  <p className="ml-4 text-gray-200">Center Y: {currentPupilData.right?.center?.y?.toFixed(2) || 'N/A'}</p>
+                  <p className="ml-4 text-gray-500 text-xs">Region: x:{currentPupilData.right?.region?.x}, y:{currentPupilData.right?.region?.y}, w:{currentPupilData.right?.region?.width}, h:{currentPupilData.right?.region?.height}</p>
+                </div>
+              )}
+            </div>
+            {!currentPupilData.left?.size && !currentPupilData.right?.size && (
+              <p className="text-center text-sm text-gray-500 mt-4">
+                No pupil detected. Check lighting and camera position.
+              </p>
+            )}
+          </div>
+        )}
+
+
         {/* Results Section - Visible after recording if data exists */}
         {!isRecording && recordingData.length > 0 && (
           <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto border-2 border-green-600">
@@ -1164,7 +1210,7 @@ function App() {
           </div>
         )}
 
-        {/* Debug Info - Show if no data was recorded */}
+        {/* Debug Info - Show if no data was recorded (only if stream is active and not recording) */}
         {!isRecording && recordingData.length === 0 && isStreamActive && (
           <div className="bg-yellow-900 border border-yellow-600 rounded-xl p-4 max-w-2xl mx-auto">
             <div className="flex items-start space-x-3">
