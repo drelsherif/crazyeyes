@@ -10,7 +10,8 @@ const MobilePupilTracker = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [fps, setFps] = useState(0);
   const [deviceInfo, setDeviceInfo] = useState({});
-  const [cameraPermission, setCameraPermission] = useState('prompt'); // 'prompt', 'granted', 'denied'
+  const [cameraPermission, setCameraPermission] = useState('prompt');
+  const [isIOSDevice, setIsIOSDevice] = useState(false);
   
   // Refs for libraries and optimization
   const faceMeshRef = useRef(null);
@@ -30,17 +31,25 @@ const MobilePupilTracker = () => {
     blurKernelSize: 3
   };
 
-  const requestCameraPermission = async () => {
-    try {
-      setCameraPermission('requesting');
-      setError(null);
-      await initializeCamera();
-      setCameraPermission('granted');
-    } catch (err) {
-      setCameraPermission('denied');
-      setError(err.message);
-    }
-  };
+  useEffect(() => {
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    setIsIOSDevice(iOS);
+    detectDeviceCapabilities();
+    initializeLibraries();
+    
+    return () => {
+      if (faceMeshRef.current) {
+        faceMeshRef.current.close();
+      }
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
+      window.removeEventListener('devicemotion', handleMotionEvent);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const detectDeviceCapabilities = () => {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     
@@ -53,14 +62,45 @@ const MobilePupilTracker = () => {
     });
   };
 
+  const handleMotionEvent = (event) => {
+    // Optional: Use motion data for stability analysis
+    const accel = event.accelerationIncludingGravity || { x: 0, y: 0, z: 0 };
+    const magnitude = Math.sqrt(accel.x ** 2 + accel.y ** 2 + accel.z ** 2);
+    
+    // You could use this for head movement detection
+    if (magnitude > 15) {
+      console.log('High movement detected:', magnitude);
+    }
+  };
+
+  const requestCameraPermission = async () => {
+    try {
+      setCameraPermission('requesting');
+      setError(null);
+      
+      // Request motion sensor permissions first (iOS pattern from your app)
+      if (isIOSDevice && typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        const motionPermission = await DeviceMotionEvent.requestPermission();
+        if (motionPermission === 'granted') {
+          window.addEventListener('devicemotion', handleMotionEvent, true);
+        }
+      }
+      
+      await initializeCamera();
+      setCameraPermission('granted');
+      
+    } catch (err) {
+      setCameraPermission('denied');
+      setError(err.message);
+    }
+  };
+
   const initializeCamera = async () => {
     try {
-      // Check if getUserMedia is available
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera API not supported on this device/browser');
       }
 
-      // Simplified constraints for better iOS compatibility
       const constraints = {
         video: {
           width: { ideal: mobileConfig.videoWidth, max: 640 },
@@ -94,7 +134,6 @@ const MobilePupilTracker = () => {
           reject(new Error('Video element error'));
         };
         
-        // Timeout after 10 seconds
         setTimeout(() => {
           reject(new Error('Camera initialization timeout'));
         }, 10000);
@@ -185,7 +224,6 @@ const MobilePupilTracker = () => {
     };
   };
 
-  // Define analyzePupilMobile before it's used
   const analyzePupilMobile = useCallback((eyeRegion) => {
     if (!cvRef.current || !videoRef.current) return;
     
@@ -344,7 +382,6 @@ const MobilePupilTracker = () => {
     try {
       setIsLoading(true);
       
-      // Don't auto-initialize camera, wait for user interaction
       await loadMediaPipe();
       await loadOpenCV();
       
@@ -356,21 +393,6 @@ const MobilePupilTracker = () => {
       setIsLoading(false);
     }
   };
-
-  useEffect(() => {
-    detectDeviceCapabilities();
-    initializeLibraries();
-    
-    return () => {
-      if (faceMeshRef.current) {
-        faceMeshRef.current.close();
-      }
-      if (processingTimeoutRef.current) {
-        clearTimeout(processingTimeoutRef.current);
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   if (error) {
     return (
@@ -401,7 +423,7 @@ const MobilePupilTracker = () => {
     );
   }
 
-  // Show camera permission prompt
+  // Show camera permission prompt (iOS pattern from your app)
   if (cameraPermission === 'prompt') {
     return (
       <div className="max-w-md mx-auto p-4 bg-white rounded-lg shadow-lg">
@@ -410,7 +432,7 @@ const MobilePupilTracker = () => {
         </h1>
         
         <div className="text-center p-6 bg-blue-50 rounded-lg">
-          <div className="text-6xl mb-4">📷</div>
+          <div className="text-6xl mb-4">👁️</div>
           <h2 className="text-xl font-semibold mb-4 text-gray-800">
             Camera Access Required
           </h2>
@@ -419,19 +441,23 @@ const MobilePupilTracker = () => {
             Your camera data is processed locally and never sent to any server.
           </p>
           
+          {isIOSDevice && (
+            <div className="mb-4 p-4 bg-yellow-50 rounded-lg">
+              <div className="text-sm text-yellow-800 font-medium mb-2">📱 iOS Device Detected</div>
+              <div className="text-xs text-yellow-700">
+                • Make sure you're using Safari browser<br/>
+                • Tap "Allow" for both camera and motion permissions<br/>
+                • Check Settings → Safari → Camera if needed
+              </div>
+            </div>
+          )}
+          
           <button
             onClick={requestCameraPermission}
             className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
           >
-            Enable Camera
+            Enable Camera & Motion Sensors
           </button>
-          
-          <div className="mt-4 text-xs text-gray-500">
-            <p>For iOS Safari:</p>
-            <p>• Make sure you're on HTTPS</p>
-            <p>• Tap "Allow" when prompted</p>
-            <p>• Check Settings → Safari → Camera if needed</p>
-          </div>
         </div>
       </div>
     );
@@ -442,8 +468,8 @@ const MobilePupilTracker = () => {
       <div className="flex items-center justify-center h-96 bg-blue-50 border border-blue-200 rounded-lg m-4">
         <div className="text-center p-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <div className="text-blue-600 text-lg font-semibold">Requesting Camera Access...</div>
-          <div className="text-blue-500 text-sm mt-2">Please allow camera permissions</div>
+          <div className="text-blue-600 text-lg font-semibold">Requesting Permissions...</div>
+          <div className="text-blue-500 text-sm mt-2">Please allow camera and motion sensor access</div>
         </div>
       </div>
     );
@@ -456,7 +482,7 @@ const MobilePupilTracker = () => {
       </h1>
       
       <div className="mb-4 text-xs text-gray-600 bg-gray-50 p-2 rounded">
-        <div>Device: {deviceInfo.isMobile ? 'Mobile' : 'Desktop'}</div>
+        <div>Device: {deviceInfo.isMobile ? 'Mobile' : 'Desktop'} {isIOSDevice ? '(iOS)' : ''}</div>
         <div>FPS: {fps} | Processing: {isProcessing ? 'Active' : 'Idle'}</div>
       </div>
       
