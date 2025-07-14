@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, CameraOff, RotateCcw, AlertCircle, ZoomIn, ZoomOut } from 'lucide-react';
+import { Camera, CameraOff, RotateCcw, AlertCircle, ZoomIn, ZoomOut, Play, Square, BarChart3 } from 'lucide-react';
 
 function App() {
   const [isStreamActive, setIsStreamActive] = useState(false);
@@ -10,12 +10,19 @@ function App() {
   const [zoom, setZoom] = useState(1);
   const [isMediaPipeLoaded, setIsMediaPipeLoaded] = useState(false);
   const [isMediaPipeInitialized, setIsMediaPipeInitialized] = useState(false);
+  const [isOpenCVLoaded, setIsOpenCVLoaded] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingData, setRecordingData] = useState([]);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [showGraph, setShowGraph] = useState(false);
   
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const canvasRef = useRef(null);
   const faceDetectionRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const recordingIntervalRef = useRef(null);
+  const recordingStartTime = useRef(null);
 
   // Detect device type
   useEffect(() => {
@@ -38,7 +45,40 @@ function App() {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
     };
+  }, []);
+
+  // Load OpenCV
+  useEffect(() => {
+    const loadOpenCV = () => {
+      console.log('Loading OpenCV...');
+      const script = document.createElement('script');
+      script.src = 'https://docs.opencv.org/4.8.0/opencv.js';
+      script.async = true;
+      script.onload = () => {
+        console.log('OpenCV script loaded, waiting for cv to be ready...');
+        // OpenCV needs time to initialize
+        const checkCV = () => {
+          if (window.cv && window.cv.Mat) {
+            console.log('OpenCV is ready!');
+            setIsOpenCVLoaded(true);
+          } else {
+            setTimeout(checkCV, 100);
+          }
+        };
+        checkCV();
+      };
+      script.onerror = (error) => {
+        console.error('Failed to load OpenCV:', error);
+        setError('Failed to load OpenCV library');
+      };
+      document.head.appendChild(script);
+    };
+
+    loadOpenCV();
   }, []);
 
   // Load MediaPipe
@@ -47,7 +87,6 @@ function App() {
       try {
         console.log('Loading MediaPipe scripts...');
         
-        // Load MediaPipe Face Mesh script
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js';
         script.crossOrigin = 'anonymous';
@@ -75,7 +114,6 @@ function App() {
   // Initialize MediaPipe Face Mesh
   useEffect(() => {
     if (!isMediaPipeLoaded || !window.FaceMesh) {
-      console.log('MediaPipe not ready yet:', { isMediaPipeLoaded, FaceMesh: !!window.FaceMesh });
       return;
     }
 
@@ -110,6 +148,129 @@ function App() {
     initializeMediaPipe();
   }, [isMediaPipeLoaded]);
 
+  // Pupil detection using OpenCV
+  const detectPupils = useCallback((landmarks) => {
+    if (!window.cv || !videoRef.current || !landmarks) return null;
+
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      // Draw current video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // Get image data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const src = window.cv.matFromImageData(imageData);
+      
+      // Convert to grayscale
+      const gray = new window.cv.Mat();
+      window.cv.cvtColor(src, gray, window.cv.COLOR_RGBA2GRAY);
+      
+      // Get eye regions from landmarks
+      const leftEyeRegion = getEyeRegion(landmarks, 'left', canvas.width, canvas.height);
+      const rightEyeRegion = getEyeRegion(landmarks, 'right', canvas.width, canvas.height);
+      
+      const leftPupilSize = measurePupilInRegion(gray, leftEyeRegion);
+      const rightPupilSize = measurePupilInRegion(gray, rightEyeRegion);
+      
+      // Cleanup
+      src.delete();
+      gray.delete();
+      
+      return {
+        left: leftPupilSize,
+        right: rightPupilSize,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.warn('Pupil detection error:', error);
+      return null;
+    }
+  }, []);
+
+  // Get eye region from landmarks
+  const getEyeRegion = (landmarks, eye, width, height) => {
+    // Eye landmark indices
+    const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+    const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
+    
+    const indices = eye === 'left' ? leftEyeIndices : rightEyeIndices;
+    
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    
+    indices.forEach(index => {
+      const point = landmarks[index];
+      const x = point.x * width;
+      const y = point.y * height;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    });
+    
+    // Add padding
+    const padding = 10;
+    return {
+      x: Math.max(0, minX - padding),
+      y: Math.max(0, minY - padding),
+      width: Math.min(width - minX + padding, maxX - minX + 2 * padding),
+      height: Math.min(height - minY + padding, maxY - minY + 2 * padding)
+    };
+  };
+
+  // Measure pupil size in eye region
+  const measurePupilInRegion = (grayMat, region) => {
+    try {
+      // Extract eye region
+      const eyeROI = grayMat.roi(new window.cv.Rect(region.x, region.y, region.width, region.height));
+      
+      // Apply Gaussian blur
+      const blurred = new window.cv.Mat();
+      window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
+      
+      // Apply threshold to find dark regions (pupil)
+      const thresh = new window.cv.Mat();
+      window.cv.threshold(blurred, thresh, 50, 255, window.cv.THRESH_BINARY_INV);
+      
+      // Find contours
+      const contours = new window.cv.MatVector();
+      const hierarchy = new window.cv.Mat();
+      window.cv.findContours(thresh, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+      
+      let maxArea = 0;
+      let pupilRadius = 0;
+      
+      // Find largest contour (likely the pupil)
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        const area = window.cv.contourArea(contour);
+        
+        if (area > maxArea && area > 100) { // Filter small noise
+          maxArea = area;
+          // Estimate radius from area
+          pupilRadius = Math.sqrt(area / Math.PI);
+        }
+      }
+      
+      // Cleanup
+      eyeROI.delete();
+      blurred.delete();
+      thresh.delete();
+      contours.delete();
+      hierarchy.delete();
+      
+      return pupilRadius;
+    } catch (error) {
+      console.warn('Pupil measurement error:', error);
+      return 0;
+    }
+  };
+
   // MediaPipe results handler
   const onFaceMeshResults = useCallback((results) => {
     if (!canvasRef.current || !videoRef.current) return;
@@ -118,25 +279,30 @@ function App() {
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
 
-    // Set canvas size to match video display size
     const rect = video.getBoundingClientRect();
     canvas.width = rect.width;
     canvas.height = rect.height;
 
-    // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
+      
+      // Detect pupils if OpenCV is loaded and recording
+      if (isOpenCVLoaded && isRecording) {
+        const pupilData = detectPupils(landmarks);
+        if (pupilData) {
+          const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
+          setRecordingData(prev => [...prev, { ...pupilData, time: timeElapsed }]);
+        }
+      }
     }
-  }, []);
+  }, [isOpenCVLoaded, isRecording, detectPupils]);
 
-  // Draw iris landmarks with better visibility
+  // Draw iris landmarks
   const drawIrisLandmarks = (ctx, landmarks, width, height) => {
-    // Left eye iris landmarks (indices 468-472)
     const leftIris = [468, 469, 470, 471, 472];
-    // Right eye iris landmarks (indices 473-477)  
     const rightIris = [473, 474, 475, 476, 477];
 
     // Draw left iris
@@ -214,7 +380,6 @@ function App() {
   // Start MediaPipe processing
   useEffect(() => {
     if (isStreamActive && isMediaPipeInitialized) {
-      console.log('Starting MediaPipe processing loop');
       processFrame();
     }
 
@@ -224,6 +389,48 @@ function App() {
       }
     };
   }, [isStreamActive, isMediaPipeInitialized, processFrame]);
+
+  // Recording timer
+  useEffect(() => {
+    if (isRecording) {
+      recordingStartTime.current = Date.now();
+      setRecordingTime(0);
+      setRecordingData([]);
+      
+      recordingIntervalRef.current = setInterval(() => {
+        const elapsed = (Date.now() - recordingStartTime.current) / 1000;
+        setRecordingTime(elapsed);
+        
+        if (elapsed >= 5) {
+          stopRecording();
+        }
+      }, 100);
+    } else {
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+    }
+
+    return () => {
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+    };
+  }, [isRecording]);
+
+  const startRecording = () => {
+    if (!isOpenCVLoaded) {
+      setError('OpenCV not loaded yet. Please wait.');
+      return;
+    }
+    setIsRecording(true);
+    setShowGraph(false);
+  };
+
+  const stopRecording = () => {
+    setIsRecording(false);
+    setShowGraph(true);
+  };
 
   const startCamera = async () => {
     setIsLoading(true);
@@ -248,7 +455,6 @@ function App() {
         audio: false
       };
 
-      console.log('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       streamRef.current = stream;
@@ -263,7 +469,6 @@ function App() {
         
         videoRef.current.onloadedmetadata = () => {
           clearTimeout(timeoutId);
-          console.log('Video loaded successfully');
           resolve();
         };
         
@@ -280,7 +485,6 @@ function App() {
       }
 
       setIsStreamActive(true);
-      console.log('Camera started successfully');
       
     } catch (err) {
       console.error('Camera error:', err);
@@ -314,6 +518,8 @@ function App() {
       videoRef.current.srcObject = null;
     }
     setIsStreamActive(false);
+    setIsRecording(false);
+    setShowGraph(false);
   };
 
   const switchCamera = () => {
@@ -329,13 +535,13 @@ function App() {
   };
 
   return (
-    <div className="h-screen bg-black text-white flex flex-col overflow-hidden">
+    <div className="min-h-screen bg-black text-white">
       {/* Header */}
-      <div className="bg-gray-900 p-3 flex items-center justify-between flex-shrink-0 safe-area-inset-top">
+      <div className="bg-gray-900 p-3 flex items-center justify-between safe-area-inset-top">
         <div className="flex items-center space-x-3">
           <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
           <div>
-            <h1 className="text-base font-bold">Iris Tracker</h1>
+            <h1 className="text-base font-bold">Pupil Tracker</h1>
             <p className="text-xs text-gray-400">{deviceInfo}</p>
           </div>
         </div>
@@ -350,8 +556,8 @@ function App() {
         </div>
       </div>
 
-      {/* Main Video Container */}
-      <div className="flex-1 flex flex-col justify-center p-4 min-h-0">
+      {/* Main Content */}
+      <div className="p-4 space-y-6">
         {/* Video Viewer */}
         <div className="relative w-full max-w-2xl mx-auto aspect-video bg-gray-900 rounded-2xl overflow-hidden shadow-2xl">
           <video
@@ -368,7 +574,6 @@ function App() {
             }}
           />
           
-          {/* Canvas overlay for MediaPipe landmarks */}
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full object-cover pointer-events-none"
@@ -384,8 +589,8 @@ function App() {
               <div className="w-full h-full flex items-center justify-center">
                 <div className="text-center">
                   <Camera size={48} className="mx-auto mb-4 text-gray-400" />
-                  <p className="text-gray-400 mb-2 text-sm">Ready to track iris</p>
-                  <p className="text-xs text-gray-500">Click start to begin</p>
+                  <p className="text-gray-400 mb-2 text-sm">Ready to track pupils</p>
+                  <p className="text-xs text-gray-500">Phase 3: OpenCV + MediaPipe</p>
                 </div>
               </div>
             )}
@@ -399,13 +604,23 @@ function App() {
               </div>
             )}
             
-            {/* Status indicator when active */}
-            {isStreamActive && (
+            {/* Recording indicator */}
+            {isRecording && (
+              <div className="absolute top-4 left-4">
+                <div className="bg-red-600 text-white px-3 py-1 rounded-full flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                  <span className="text-sm font-medium">REC {recordingTime.toFixed(1)}s</span>
+                </div>
+              </div>
+            )}
+            
+            {/* Status indicator */}
+            {isStreamActive && !isRecording && (
               <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2">
                 <div className="text-white text-xs bg-black bg-opacity-60 px-3 py-1 rounded-full backdrop-blur-sm flex items-center space-x-2">
                   <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
                   <span>
-                    {isMediaPipeInitialized ? 'Iris Tracking Active' : 'Loading MediaPipe...'}
+                    Ready - OpenCV: {isOpenCVLoaded ? '✓' : '⏳'} MediaPipe: {isMediaPipeInitialized ? '✓' : '⏳'}
                   </span>
                 </div>
               </div>
@@ -424,7 +639,7 @@ function App() {
 
         {/* Zoom Slider */}
         {isStreamActive && (
-          <div className="mt-4 flex items-center justify-center space-x-4">
+          <div className="flex items-center justify-center space-x-4">
             <ZoomOut size={16} className="text-gray-400" />
             <div className="flex items-center space-x-2">
               <span className="text-xs text-gray-400 w-8">1x</span>
@@ -445,14 +660,14 @@ function App() {
 
         {/* Error Display */}
         {error && (
-          <div className="mt-4 p-3 bg-red-900 border border-red-700 rounded-xl flex items-start space-x-2 max-w-2xl mx-auto">
+          <div className="p-3 bg-red-900 border border-red-700 rounded-xl flex items-start space-x-2 max-w-2xl mx-auto">
             <AlertCircle size={18} className="text-red-400 mt-0.5 flex-shrink-0" />
             <p className="text-sm text-red-100">{error}</p>
           </div>
         )}
 
         {/* Controls */}
-        <div className="mt-4 flex justify-center">
+        <div className="flex flex-col items-center space-y-4">
           {!isStreamActive ? (
             <button
               onClick={startCamera}
@@ -460,18 +675,128 @@ function App() {
               className="flex items-center space-x-2 px-8 py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl transition-all active:scale-95 font-medium text-lg"
             >
               <Camera size={20} />
-              <span>{isLoading ? 'Starting...' : 'Start Iris Tracking'}</span>
+              <span>{isLoading ? 'Starting...' : 'Start Pupil Tracking'}</span>
             </button>
           ) : (
-            <button
-              onClick={stopCamera}
-              className="flex items-center space-x-2 px-8 py-4 bg-red-600 hover:bg-red-700 rounded-xl transition-all active:scale-95 font-medium text-lg"
-            >
-              <CameraOff size={20} />
-              <span>Stop Camera</span>
-            </button>
+            <div className="flex space-x-4">
+              <button
+                onClick={stopCamera}
+                className="flex items-center space-x-2 px-6 py-3 bg-red-600 hover:bg-red-700 rounded-xl transition-all active:scale-95 font-medium"
+              >
+                <CameraOff size={18} />
+                <span>Stop Camera</span>
+              </button>
+              
+              {!isRecording ? (
+                <button
+                  onClick={startRecording}
+                  disabled={!isOpenCVLoaded || !isMediaPipeInitialized}
+                  className="flex items-center space-x-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-xl transition-all active:scale-95 font-medium"
+                >
+                  <Play size={18} />
+                  <span>Record 5s</span>
+                </button>
+              ) : (
+                <button
+                  onClick={stopRecording}
+                  className="flex items-center space-x-2 px-6 py-3 bg-orange-600 hover:bg-orange-700 rounded-xl transition-all active:scale-95 font-medium"
+                >
+                  <Square size={18} />
+                  <span>Stop ({(5 - recordingTime).toFixed(1)}s)</span>
+                </button>
+              )}
+              
+              {recordingData.length > 0 && !isRecording && (
+                <button
+                  onClick={() => setShowGraph(!showGraph)}
+                  className="flex items-center space-x-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl transition-all active:scale-95 font-medium"
+                >
+                  <BarChart3 size={18} />
+                  <span>{showGraph ? 'Hide' : 'Show'} Graph</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
+
+        {/* Graph Display */}
+        {showGraph && recordingData.length > 0 && (
+          <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto">
+            <h3 className="text-lg font-bold mb-4 text-center">Pupil Size Over Time</h3>
+            <div className="relative h-64 bg-gray-800 rounded-lg p-4">
+              <svg width="100%" height="100%" viewBox="0 0 400 200" className="overflow-visible">
+                {/* Grid lines */}
+                <defs>
+                  <pattern id="grid" width="40" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 20" fill="none" stroke="#374151" strokeWidth="1"/>
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+                
+                {/* Data lines */}
+                {recordingData.length > 1 && (
+                  <>
+                    {/* Left eye data */}
+                    <polyline
+                      fill="none"
+                      stroke="#00ff00"
+                      strokeWidth="2"
+                      points={recordingData.map((d, i) => 
+                        `${(d.time / 5) * 400},${200 - (d.left / 20) * 180}`
+                      ).join(' ')}
+                    />
+                    {/* Right eye data */}
+                    <polyline
+                      fill="none"
+                      stroke="#ff0000"
+                      strokeWidth="2"
+                      points={recordingData.map((d, i) => 
+                        `${(d.time / 5) * 400},${200 - (d.right / 20) * 180}`
+                      ).join(' ')}
+                    />
+                  </>
+                )}
+                
+                {/* Labels */}
+                <text x="10" y="15" fill="#9ca3af" fontSize="12">Pupil Size</text>
+                <text x="350" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
+              </svg>
+            </div>
+            <div className="flex justify-center space-x-6 mt-2">
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-green-500 rounded"></div>
+                <span className="text-sm text-gray-300">Left Eye</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-red-500 rounded"></div>
+                <span className="text-sm text-gray-300">Right Eye</span>
+              </div>
+            </div>
+            
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div className="bg-gray-800 rounded-lg p-3 text-center">
+                <p className="text-xs text-gray-400">Left Eye Avg</p>
+                <p className="text-lg font-bold text-green-400">
+                  {recordingData.length > 0 ? 
+                    (recordingData.reduce((sum, d) => sum + d.left, 0) / recordingData.length).toFixed(1) 
+                    : '0'} px
+                </p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-3 text-center">
+                <p className="text-xs text-gray-400">Right Eye Avg</p>
+                <p className="text-lg font-bold text-red-400">
+                  {recordingData.length > 0 ? 
+                    (recordingData.reduce((sum, d) => sum + d.right, 0) / recordingData.length).toFixed(1) 
+                    : '0'} px
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bottom spacer for scrolling */}
+        <div className="h-20"></div>
       </div>
 
       {/* Bottom Safe Area */}

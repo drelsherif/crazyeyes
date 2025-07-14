@@ -11,7 +11,7 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Mobile optimizations */
+/* Mobile optimizations - Allow scrolling */
 * {
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
@@ -20,11 +20,14 @@
 }
 
 html, body, #root {
-  height: 100vh;
-  height: 100dvh; /* Dynamic viewport height for mobile */
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  /* Remove height restrictions to allow scrolling */
+  min-height: 100vh;
+  min-height: 100dvh;
+  /* Allow vertical scrolling */
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -71,4 +74,15 @@ video {
   .aspect-video {
     aspect-ratio: 3/4;
   }
+}
+
+/* Ensure scrollable content */
+.min-h-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Graph styling */
+svg text {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 }
