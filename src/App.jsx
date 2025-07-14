@@ -60,62 +60,79 @@ function App() {
       console.log('Video tracks:', stream.getVideoTracks());
       console.log('Stream active:', stream.active);
       
-      if (videoRef.current && stream) {
-        console.log('Video element exists:', !!videoRef.current);
-        console.log('Video element dimensions:', videoRef.current.offsetWidth, videoRef.current.offsetHeight);
-        
-        // Force a re-render by updating state first
-        setIsStreamActive(true);
-        
-        // Wait for React to update
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        // Now set the video source
-        videoRef.current.srcObject = stream;
-        streamRef.current = stream;
-        
-        // Set video attributes
-        videoRef.current.muted = true;
-        videoRef.current.playsInline = true;
-        videoRef.current.autoplay = true;
-        
-        // Force video to load and play
-        videoRef.current.load();
-        
-        // Wait for loadedmetadata event
-        await new Promise((resolve, reject) => {
-          const timeoutId = setTimeout(() => reject(new Error('Video load timeout')), 10000);
-          
-          videoRef.current.onloadedmetadata = () => {
-            clearTimeout(timeoutId);
-            console.log('Video metadata loaded, dimensions:', videoRef.current.videoWidth, videoRef.current.videoHeight);
-            resolve();
-          };
-          
-          videoRef.current.onerror = (e) => {
-            clearTimeout(timeoutId);
-            reject(new Error('Video load error: ' + e.message));
-          };
-        });
-        
-        // Now try to play
-        try {
-          await videoRef.current.play();
-          console.log('Video is now playing');
-        } catch (playError) {
-          console.warn('Auto-play failed, but video should still work:', playError);
-        }
-        
-        // Set transform after everything is loaded
-        videoRef.current.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
-        
-        console.log('Video setup complete');
-      } else {
-        throw new Error('Video element not available or stream is null');
+      // Store the stream first
+      streamRef.current = stream;
+      
+      // Update state to show video element
+      setIsStreamActive(true);
+      
+      // Wait for React to render the video element
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Check if video element is now available
+      let attempts = 0;
+      while (!videoRef.current && attempts < 10) {
+        console.log('Waiting for video element... attempt', attempts + 1);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
       }
+      
+      if (!videoRef.current) {
+        throw new Error('Video element still not available after waiting');
+      }
+      
+      console.log('Video element found:', !!videoRef.current);
+      console.log('Video element dimensions:', videoRef.current.offsetWidth, videoRef.current.offsetHeight);
+      
+      // Now set the video source
+      videoRef.current.srcObject = stream;
+      
+      // Set video attributes
+      videoRef.current.muted = true;
+      videoRef.current.playsInline = true;
+      videoRef.current.autoplay = true;
+      
+      // Force video to load and play
+      videoRef.current.load();
+      
+      // Wait for loadedmetadata event
+      await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error('Video load timeout')), 10000);
+        
+        videoRef.current.onloadedmetadata = () => {
+          clearTimeout(timeoutId);
+          console.log('Video metadata loaded, dimensions:', videoRef.current.videoWidth, videoRef.current.videoHeight);
+          resolve();
+        };
+        
+        videoRef.current.onerror = (e) => {
+          clearTimeout(timeoutId);
+          reject(new Error('Video load error: ' + e.message));
+        };
+      });
+      
+      // Now try to play
+      try {
+        await videoRef.current.play();
+        console.log('Video is now playing');
+      } catch (playError) {
+        console.warn('Auto-play failed, but video should still work:', playError);
+      }
+      
+      // Set transform after everything is loaded
+      videoRef.current.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+      
+      console.log('Video setup complete');
+      
     } catch (err) {
       console.error('Error accessing camera:', err);
       setIsStreamActive(false); // Reset state on error
+      
+      // Clean up stream on error
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
       
       let errorMessage = 'Failed to access camera. ';
       
