@@ -1,13 +1,27 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pupil Tracker</title>
-    
-    <!-- Add Tailwind CSS via CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Iris Camera" />
+    <title>Iris Camera PWA</title>
+    <style>
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        height: -webkit-fill-available;
+        overflow: hidden;
+        -webkit-overflow-scrolling: touch;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

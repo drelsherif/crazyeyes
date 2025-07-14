@@ -7,25 +7,25 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
-        name: 'CrazyEyes Pupil Tracker',
-        short_name: 'CrazyEyes',
-        description: 'Real-time pupil tracking with MediaPipe and OpenCV',
-        theme_color: '#2563eb',
-        background_color: '#ffffff',
+        name: 'Iris Camera PWA',
+        short_name: 'IrisCamera',
+        description: 'Camera app for iris and pupil analysis',
+        theme_color: '#111827',
+        background_color: '#000000',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
         icons: [
           {
-            src: '/icons/icon-192x192.png',
+            src: 'pwa-192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: '/icons/icon-512x512.png',
+            src: 'pwa-512x512.png',
             sizes: '512x512',
             type: 'image/png'
           }
@@ -37,8 +37,7 @@ export default defineConfig({
     })
   ],
   server: {
-    https: true, // Required for camera access on mobile
-    host: '0.0.0.0', // Allow external connections
-    port: 5173
+    https: true, // Enable HTTPS for local development
+    host: '0.0.0.0' // Allow external connections for mobile testing
   }
 })
