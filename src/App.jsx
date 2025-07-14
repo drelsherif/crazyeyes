@@ -14,7 +14,7 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingData, setRecordingData] = useState([]);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [showGraph, setShowGraph] = useState(false); // Initially false
+  const [showGraph, setShowGraph] = useState(false);
   const [currentPupilData, setCurrentPupilData] = useState(null);
   const [focusMode, setFocusMode] = useState('both'); // 'both', 'left', 'right'
   
@@ -130,8 +130,7 @@ function App() {
 
         faceMesh.setOptions({
           maxNumFaces: 1,
-          // IMPORTANT: refineLandmarks must be true for iris landmarks (468-477) to be available
-          refineLandmarks: true, 
+          refineLandmarks: true, // This is crucial for iris landmarks
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
@@ -149,6 +148,139 @@ function App() {
 
     initializeMediaPipe();
   }, [isMediaPipeLoaded]);
+
+  // Enhanced eye region extraction with focus mode optimization
+  const getEyeRegionAndPupil = useCallback((grayMat, landmarks, eye, width, height) => {
+    try {
+      // MediaPipe Iris Landmarks
+      // Left Iris: 468, 469, 470, 471, 472
+      // Right Iris: 473, 474, 475, 476, 477
+      const irisIndices = eye === 'left' ? [468, 469, 470, 471, 472] : [473, 474, 475, 476, 477];
+      
+      let minX = width, minY = height, maxX = 0, maxY = 0;
+      let validIrisPoints = 0;
+
+      irisIndices.forEach(index => {
+        const point = landmarks[index];
+        if (point) { // Ensure the landmark exists
+          const x = point.x * width;
+          const y = point.y * height;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+          validIrisPoints++;
+        }
+      });
+
+      if (validIrisPoints === 0) {
+        console.log(`No valid iris landmarks found for ${eye} eye.`);
+        return { size: 0, center: null, region: null };
+      }
+      
+      // Add a small padding around the detected iris region
+      const padding = focusMode === eye ? 15 : 10; // Slightly less padding needed with precise iris ROI
+      const eyeRegion = {
+        x: Math.max(0, Math.floor(minX - padding)),
+        y: Math.max(0, Math.floor(minY - padding)),
+        width: Math.min(width - Math.floor(minX - padding), Math.floor(maxX - minX + 2 * padding)),
+        height: Math.min(height - Math.floor(minY - padding), Math.floor(maxY - minY + 2 * padding))
+      };
+      
+      if (eyeRegion.width < 10 || eyeRegion.height < 10) { // Reduced minimum size, as iris is smaller
+        console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
+        return { size: 0, center: null, region: eyeRegion };
+      }
+      
+      const eyeROI = grayMat.roi(new window.cv.Rect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height));
+      
+      const blurred = new window.cv.Mat();
+      const blurSize = focusMode === eye ? 7 : 5;
+      window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(blurSize, blurSize), 0);
+      
+      const thresh = new window.cv.Mat();
+      // Adjust threshold based on the new, tighter ROI
+      const thresholdValue = focusMode === eye ? 35 : 40; // Potentially lower for darker pupil
+      window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
+      
+      const kernelSize = focusMode === eye ? 3 : 2; // Smaller kernel for precise features
+      const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
+      let morphed = new window.cv.Mat(); 
+      window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
+      
+      if (focusMode === eye) {
+        const opened = new window.cv.Mat();
+        window.cv.morphologyEx(morphed, opened, window.cv.MORPH_OPEN, kernel);
+        morphed.delete(); 
+        morphed = opened; 
+      }
+      
+      const contours = new window.cv.MatVector();
+      const hierarchy = new window.cv.Mat();
+      window.cv.findContours(morphed, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+      
+      let bestPupil = { size: 0, center: null };
+      let maxScore = 0;
+      
+      // Adjusted min/max area for a pupil within the iris region
+      const minArea = focusMode === eye ? 10 : 20; // Smaller min area
+      const maxArea = focusMode === eye ? 800 : 500; // Smaller max area, typical pupil won't be huge
+      
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        const area = window.cv.contourArea(contour);
+        
+        if (area > minArea && area < maxArea) {
+          const moments = window.cv.moments(contour);
+          const perimeter = window.cv.arcLength(contour, true);
+          const circularity = perimeter === 0 ? 0 : 4 * Math.PI * area / (perimeter * perimeter); // Avoid division by zero
+          
+          let centerX = 0, centerY = 0;
+          if (moments.m00 !== 0) {
+            centerX = moments.m10 / moments.m00;
+            centerY = moments.m01 / moments.m00;
+          }
+          
+          let score = area * circularity;
+          if (focusMode === eye) {
+            score *= 1.5; 
+          }
+          
+          const minCircularity = focusMode === eye ? 0.3 : 0.4; // Require higher circularity
+          if (score > maxScore && circularity > minCircularity) {
+            maxScore = score;
+            bestPupil = {
+              size: Math.sqrt(area / Math.PI) * 2,
+              center: {
+                x: eyeRegion.x + centerX,
+                y: eyeRegion.y + centerY
+              }
+            };
+          }
+        }
+        contour.delete(); // Delete contour after use
+      }
+      
+      // Cleanup
+      eyeROI.delete();
+      blurred.delete();
+      thresh.delete();
+      kernel.delete();
+      morphed.delete(); 
+      contours.delete();
+      hierarchy.delete();
+      
+      return {
+        size: bestPupil.size,
+        center: bestPupil.center,
+        region: eyeRegion
+      };
+      
+    } catch (error) {
+      console.error(`Error processing ${eye} eye:`, error);
+      return { size: 0, center: null, region: null };
+    }
+  }, [focusMode]);
 
   // Enhanced pupil detection with focus mode support
   const detectPupils = useCallback((landmarks) => {
@@ -200,135 +332,7 @@ function App() {
       console.error('Pupil detection error:', error);
       return null;
     }
-  }, [focusMode]);
-
-  // Enhanced eye region extraction with focus mode optimization
-  const getEyeRegionAndPupil = (grayMat, landmarks, eye, width, height) => {
-    try {
-      const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
-      const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
-      
-      const indices = eye === 'left' ? leftEyeIndices : rightEyeIndices;
-      
-      let minX = width, minY = height, maxX = 0, maxY = 0;
-      
-      indices.forEach(index => {
-        if (landmarks[index]) {
-          const point = landmarks[index];
-          const x = point.x * width;
-          const y = point.y * height;
-          minX = Math.min(minX, x);
-          minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x);
-          maxY = Math.max(maxY, y);
-        }
-      });
-      
-      // Larger padding for focused mode
-      const padding = focusMode === eye ? 20 : 15;
-      const eyeRegion = {
-        x: Math.max(0, Math.floor(minX - padding)),
-        y: Math.max(0, Math.floor(minY - padding)),
-        width: Math.min(width - Math.floor(minX - padding), Math.floor(maxX - minX + 2 * padding)),
-        height: Math.min(height - Math.floor(minY - padding), Math.floor(maxY - minY + 2 * padding))
-      };
-      
-      if (eyeRegion.width < 30 || eyeRegion.height < 20) {
-        console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
-        return { size: 0, center: null, region: eyeRegion };
-      }
-      
-      const eyeROI = grayMat.roi(new window.cv.Rect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height));
-      
-      // Enhanced processing for focused eye
-      const blurred = new window.cv.Mat();
-      const blurSize = focusMode === eye ? 7 : 5; // More blur for focused eye
-      window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(blurSize, blurSize), 0);
-      
-      const thresh = new window.cv.Mat();
-      const thresholdValue = focusMode === eye ? 45 : 50; // Lower threshold for focused eye
-      window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
-      
-      // More aggressive morphological operations for focused eye
-      const kernelSize = focusMode === eye ? 5 : 3;
-      const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
-      let morphed = new window.cv.Mat(); // Changed to let from const
-      window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
-      
-      if (focusMode === eye) {
-        // Additional processing for focused eye
-        const opened = new window.cv.Mat();
-        window.cv.morphologyEx(morphed, opened, window.cv.MORPH_OPEN, kernel);
-        morphed.delete(); // Delete the old morphed Mat
-        morphed = opened; // Assign the new opened Mat
-      }
-      
-      const contours = new window.cv.MatVector();
-      const hierarchy = new window.cv.Mat();
-      window.cv.findContours(morphed, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
-      
-      let bestPupil = { size: 0, center: null };
-      let maxScore = 0;
-      
-      // Adjusted scoring for focus mode
-      const minArea = focusMode === eye ? 30 : 50;
-      const maxArea = focusMode === eye ? 3000 : 2000;
-      
-      for (let i = 0; i < contours.size(); i++) {
-        const contour = contours.get(i);
-        const area = window.cv.contourArea(contour);
-        
-        if (area > minArea && area < maxArea) {
-          const moments = window.cv.moments(contour);
-          const perimeter = window.cv.arcLength(contour, true);
-          const circularity = 4 * Math.PI * area / (perimeter * perimeter);
-          
-          let centerX = 0, centerY = 0;
-          if (moments.m00 !== 0) {
-            centerX = moments.m10 / moments.m00;
-            centerY = moments.m01 / moments.m00;
-          }
-          
-          // Enhanced scoring for focused eye
-          let score = area * circularity;
-          if (focusMode === eye) {
-            score *= 1.5; // Boost score for focused eye
-          }
-          
-          const minCircularity = focusMode === eye ? 0.2 : 0.3;
-          if (score > maxScore && circularity > minCircularity) {
-            maxScore = score;
-            bestPupil = {
-              size: Math.sqrt(area / Math.PI) * 2,
-              center: {
-                x: eyeRegion.x + centerX,
-                y: eyeRegion.y + centerY
-              }
-            };
-          }
-        }
-      }
-      
-      // Cleanup
-      eyeROI.delete();
-      blurred.delete();
-      thresh.delete();
-      kernel.delete();
-      morphed.delete(); // Ensure this is deleted correctly
-      contours.delete();
-      hierarchy.delete();
-      
-      return {
-        size: bestPupil.size,
-        center: bestPupil.center,
-        region: eyeRegion
-      };
-      
-    } catch (error) {
-      console.error(`Error processing ${eye} eye:`, error);
-      return { size: 0, center: null, region: null };
-    }
-  };
+  }, [focusMode, getEyeRegionAndPupil]); // Added getEyeRegionAndPupil dependency
 
   // MediaPipe results handler
   const onFaceMeshResults = useCallback((results) => {
@@ -348,7 +352,6 @@ function App() {
       const landmarks = results.multiFaceLandmarks[0];
       
       // Draw iris landmarks based on focus mode
-      // This will only draw if refineLandmarks is true in MediaPipe initialization
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
       // Detect pupils if OpenCV is loaded
@@ -467,7 +470,6 @@ function App() {
 
   // Enhanced iris landmark drawing with focus mode
   const drawIrisLandmarks = (ctx, landmarks, width, height) => {
-    // These indices are for iris landmarks, available only when refineLandmarks is true
     const leftIris = [468, 469, 470, 471, 472];
     const rightIris = [473, 474, 475, 476, 477];
 
