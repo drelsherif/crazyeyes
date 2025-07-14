@@ -13,6 +13,7 @@ const MobilePupilTracker = () => {
   const [cameraPermission, setCameraPermission] = useState('prompt');
   const [isIOSDevice, setIsIOSDevice] = useState(false);
   const [librariesLoaded, setLibrariesLoaded] = useState(false);
+  const [debugLog, setDebugLog] = useState([]);
   
   // Refs for libraries and optimization
   const faceMeshRef = useRef(null);
@@ -32,25 +33,16 @@ const MobilePupilTracker = () => {
     blurKernelSize: 3
   };
 
-  useEffect(() => {
-    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setIsIOSDevice(iOS);
-    detectDeviceCapabilities();
-    initializeLibraries();
-    
-    return () => {
-      if (faceMeshRef.current) {
-        faceMeshRef.current.close();
-      }
-      if (processingTimeoutRef.current) {
-        clearTimeout(processingTimeoutRef.current);
-      }
-      window.removeEventListener('devicemotion', handleMotionEvent);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Helper to add debug messages
+  const addDebugLog = (message) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `${timestamp}: ${message}`;
+    console.log(logEntry);
+    setDebugLog(prev => [...prev.slice(-4), logEntry]); // Keep last 5 logs
+  };
 
-  const detectDeviceCapabilities = () => {
+  // Detect device capabilities
+  const detectDeviceCapabilities = () => { // Missing opening brace fixed here
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     
@@ -63,63 +55,96 @@ const MobilePupilTracker = () => {
     });
   };
 
+  // Handle device motion events (e.g., for stability analysis)
   const handleMotionEvent = (event) => {
-    // Optional: Use motion data for stability analysis
     const accel = event.accelerationIncludingGravity || { x: 0, y: 0, z: 0 };
     const magnitude = Math.sqrt(accel.x ** 2 + accel.y ** 2 + accel.z ** 2);
     
-    // You could use this for head movement detection
     if (magnitude > 15) {
-      console.log('High movement detected:', magnitude);
+      addDebugLog('High movement detected: ' + magnitude.toFixed(2));
     }
   };
 
+  // Request camera and motion sensor permissions
   const requestCameraPermission = async () => {
     try {
+      addDebugLog('Requesting camera permission...');
       setCameraPermission('requesting');
       setError(null);
       
-      // Request motion sensor permissions first (iOS pattern from your app)
+      // Wait for libraries to be loaded first
+      if (!librariesLoaded) {
+        addDebugLog('Waiting for libraries to load...');
+        let attempts = 0;
+        while (!librariesLoaded && attempts < 30) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          attempts++;
+        }
+        
+        if (!librariesLoaded) {
+          throw new Error('Libraries failed to load in time');
+        }
+      }
+      
+      // Request motion sensor permissions first (iOS pattern)
       if (isIOSDevice && typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         try {
           const motionPermission = await DeviceMotionEvent.requestPermission();
           if (motionPermission === 'granted') {
             window.addEventListener('devicemotion', handleMotionEvent, true);
+            addDebugLog('Motion permission granted');
+          } else {
+            addDebugLog(`Motion permission ${motionPermission}`);
           }
         } catch (motionErr) {
-          console.log('Motion permission failed, continuing without motion data:', motionErr);
+          addDebugLog(`Motion permission failed: ${motionErr.message}`);
         }
       }
       
-      // Add a small delay to ensure video element is rendered
-      await new Promise(resolve => setTimeout(resolve, 200));
+      addDebugLog('Waiting for UI to be ready...');
+      await new Promise(resolve => setTimeout(resolve, 500));
       
+      addDebugLog('Initializing camera...');
       await initializeCamera();
       
-      // Start processing once camera is ready and libraries are loaded
       if (librariesLoaded && faceMeshRef.current) {
+        addDebugLog('Starting processing loop...');
         startProcessingLoop();
+      } else {
+        addDebugLog(`Processing not started - librariesLoaded: ${librariesLoaded}, faceMesh: ${!!faceMeshRef.current}`);
       }
       
       setCameraPermission('granted');
+      addDebugLog('Camera permission granted and setup complete');
       
     } catch (err) {
-      console.error('Permission request failed:', err);
+      addDebugLog(`Permission request failed: ${err.message}`);
       setCameraPermission('denied');
       setError(err.message);
     }
   };
 
+  // Initialize camera stream
   const initializeCamera = async () => {
     try {
+      addDebugLog('Checking camera API support...');
+      
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera API not supported on this device/browser');
       }
 
-      // Ensure video element exists
-      if (!videoRef.current) {
-        throw new Error('Video element not ready');
+      addDebugLog('Waiting for video element...');
+      let attempts = 0;
+      while (!videoRef.current && attempts < 20) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
       }
+      
+      if (!videoRef.current) {
+        throw new Error('Video element not available after waiting');
+      }
+      
+      addDebugLog('Video element found, requesting camera...');
 
       const constraints = {
         video: {
@@ -131,17 +156,13 @@ const MobilePupilTracker = () => {
         audio: false
       };
       
-      console.log('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       if (!stream || !stream.getVideoTracks().length) {
         throw new Error('No video stream available');
       }
       
-      console.log('Camera stream obtained, setting up video...');
-      
-      // Wait a bit for video element to be fully ready
-      await new Promise(resolve => setTimeout(resolve, 100));
+      addDebugLog('Camera stream obtained, setting up video...');
       
       if (!videoRef.current) {
         throw new Error('Video element became null after stream creation');
@@ -153,21 +174,21 @@ const MobilePupilTracker = () => {
         const video = videoRef.current;
         
         const onLoadedMetadata = () => {
-          console.log('Video metadata loaded');
+          addDebugLog('Video metadata loaded');
           video.removeEventListener('loadedmetadata', onLoadedMetadata);
           video.removeEventListener('error', onError);
           
           video.play().then(() => {
-            console.log('Video playing successfully');
+            addDebugLog('Video playing successfully');
             resolve();
           }).catch(err => {
-            console.error('Video play failed:', err);
+            addDebugLog(`Video play failed: ${err.message}`);
             reject(new Error(`Video play failed: ${err.message}`));
           });
         };
         
         const onError = (err) => {
-          console.error('Video error:', err);
+          addDebugLog(`Video error: ${err.message || err}`);
           video.removeEventListener('loadedmetadata', onLoadedMetadata);
           video.removeEventListener('error', onError);
           reject(new Error('Video element error'));
@@ -176,16 +197,18 @@ const MobilePupilTracker = () => {
         video.addEventListener('loadedmetadata', onLoadedMetadata);
         video.addEventListener('error', onError);
         
-        // Timeout after 10 seconds
         setTimeout(() => {
-          video.removeEventListener('loadedmetadata', onLoadedMetadata);
-          video.removeEventListener('error', onError);
-          reject(new Error('Camera initialization timeout'));
-        }, 10000);
+          if (video.readyState < 3) { // Check if video is not yet playing
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+            addDebugLog('Camera initialization timeout');
+            reject(new Error('Camera initialization timeout: Video failed to load or play.'));
+          }
+        }, 15000); // 15 seconds timeout
       });
       
     } catch (err) {
-      console.error('Camera error:', err);
+      addDebugLog(`Camera error: ${err.message}`);
       let errorMessage = 'Camera access failed. ';
       
       if (err.name === 'NotAllowedError') {
@@ -202,37 +225,37 @@ const MobilePupilTracker = () => {
     }
   };
 
+  // Load OpenCV.js library
   const loadOpenCV = async () => {
     try {
-      console.log('Loading OpenCV...');
+      addDebugLog('Loading OpenCV...');
       
       if (window.cv && window.cv.Mat) {
-        console.log('OpenCV already loaded');
+        addDebugLog('OpenCV already loaded');
         cvRef.current = window.cv;
         return;
       }
       
       const script = document.createElement('script');
       script.src = 'https://docs.opencv.org/4.5.0/opencv.js';
+      script.async = true; // Added async to script
       document.head.appendChild(script);
       
       await new Promise((resolve, reject) => {
         script.onload = () => {
-          console.log('OpenCV script loaded');
+          addDebugLog('OpenCV script loaded');
           resolve();
         };
         script.onerror = () => {
-          console.error('OpenCV script failed to load');
+          addDebugLog('OpenCV script failed to load');
           reject(new Error('OpenCV script failed to load'));
         };
         
-        // Timeout after 20 seconds (OpenCV is large)
         setTimeout(() => {
           reject(new Error('OpenCV loading timeout'));
         }, 20000);
       });
       
-      // Wait for OpenCV to be ready
       let attempts = 0;
       while ((!window.cv || !window.cv.Mat) && attempts < 100) {
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -244,14 +267,106 @@ const MobilePupilTracker = () => {
       }
       
       cvRef.current = window.cv;
-      console.log('OpenCV ready');
+      addDebugLog('OpenCV ready');
       
     } catch (err) {
-      console.error('OpenCV loading error:', err);
+      addDebugLog(`OpenCV loading error: ${err.message}`);
       throw new Error(`OpenCV initialization failed: ${err.message}`);
     }
   };
 
+  // Load MediaPipe FaceMesh library
+  const loadMediaPipe = async () => {
+    try {
+      addDebugLog('Loading MediaPipe...');
+      
+      if (window.FaceMesh) {
+        addDebugLog('MediaPipe already loaded');
+        return;
+      }
+      
+      const faceMeshScript = document.createElement('script');
+      faceMeshScript.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js';
+      faceMeshScript.async = true; // Added async to script
+      document.head.appendChild(faceMeshScript);
+      
+      await new Promise((resolve, reject) => {
+        faceMeshScript.onload = () => {
+          addDebugLog('MediaPipe script loaded');
+          resolve();
+        };
+        faceMeshScript.onerror = () => {
+          addDebugLog('MediaPipe script failed to load');
+          reject(new Error('MediaPipe script failed to load'));
+        };
+        
+        setTimeout(() => {
+          reject(new Error('MediaPipe loading timeout'));
+        }, 15000);
+      });
+      
+      let attempts = 0;
+      while (!window.FaceMesh && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      
+      if (!window.FaceMesh) {
+        throw new Error('MediaPipe FaceMesh not available after loading');
+      }
+      
+      addDebugLog('MediaPipe FaceMesh available');
+      
+    } catch (err) {
+      addDebugLog(`MediaPipe loading error: ${err.message}`);
+      throw new Error(`MediaPipe initialization failed: ${err.message}`);
+    }
+  };
+
+  // Initialize all necessary libraries
+  const initializeLibraries = async () => {
+    try {
+      addDebugLog('Starting library initialization...');
+      setIsLoading(true);
+      setError(null);
+      
+      addDebugLog('Loading MediaPipe and OpenCV...');
+      await Promise.all([
+        loadMediaPipe(),
+        loadOpenCV()
+      ]);
+      
+      addDebugLog('Libraries loaded, setting up MediaPipe...');
+      
+      const faceMesh = new window.FaceMesh({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`;
+        }
+      });
+      
+      faceMesh.setOptions({
+        maxNumFaces: mobileConfig.maxFaces,
+        refineLandmarks: false,
+        minDetectionConfidence: mobileConfig.minDetectionConfidence,
+        minTrackingConfidence: mobileConfig.minTrackingConfidence
+      });
+      
+      faceMesh.onResults(onFaceMeshResults);
+      faceMeshRef.current = faceMesh;
+      
+      setLibrariesLoaded(true);
+      setIsLoading(false);
+      addDebugLog('All libraries initialized successfully');
+      
+    } catch (err) {
+      addDebugLog(`Error initializing libraries: ${err.message}`);
+      setError(`Failed to initialize: ${err.message}`);
+      setIsLoading(false);
+      setLibrariesLoaded(false);
+    }
+  };
+
+  // Update FPS counter
   const updateFPS = () => {
     const now = Date.now();
     const counter = fpsCounterRef.current;
@@ -264,6 +379,7 @@ const MobilePupilTracker = () => {
     }
   };
 
+  // Get eye region from face landmarks
   const getEyeRegion = (landmarks, eyeIndices, width, height) => {
     if (!landmarks || eyeIndices.length === 0) return null;
     
@@ -291,15 +407,29 @@ const MobilePupilTracker = () => {
     };
   };
 
+  // Analyze pupil using OpenCV
   const analyzePupilMobile = useCallback((eyeRegion) => {
     if (!cvRef.current || !videoRef.current) return;
     
     try {
       const cv = cvRef.current;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true }); // Add willReadFrequently for performance
       
-      const imageData = ctx.getImageData(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height);
+      // Ensure the canvas dimensions match the video
+      canvas.width = videoRef.current.videoWidth || mobileConfig.videoWidth;
+      canvas.height = videoRef.current.videoHeight || mobileConfig.videoHeight;
+
+      // Draw the video frame to the canvas
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+
+      // Get image data for the eye region from the canvas
+      const imageData = ctx.getImageData(
+        Math.floor(eyeRegion.x),
+        Math.floor(eyeRegion.y),
+        Math.ceil(eyeRegion.width),
+        Math.ceil(eyeRegion.height)
+      );
       const src = cv.matFromImageData(imageData);
       
       const gray = new cv.Mat();
@@ -351,6 +481,8 @@ const MobilePupilTracker = () => {
             timestamp: Date.now()
           });
         }
+      } else {
+        setPupilData(null); // Clear pupil data if not found
       }
       
       src.delete();
@@ -361,14 +493,17 @@ const MobilePupilTracker = () => {
       hierarchy.delete();
       
     } catch (err) {
+      addDebugLog(`Pupil analysis error: ${err.message}`);
       console.error('Pupil analysis error:', err);
     }
-  }, [mobileConfig.blurKernelSize, mobileConfig.pupilMinArea]);
+  }, [mobileConfig.blurKernelSize, mobileConfig.pupilMinArea, mobileConfig.videoWidth, mobileConfig.videoHeight]); // Added mobileConfig deps
 
+  // Callback for FaceMesh results
   const onFaceMeshResults = useCallback((results) => {
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     
+    // Clear the canvas and draw the video frame
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     
@@ -387,121 +522,83 @@ const MobilePupilTracker = () => {
         ctx.strokeRect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height);
         
         analyzePupilMobile(eyeRegion);
+      } else {
+        setPupilData(null); // Clear pupil data if no eye region is detected
       }
+    } else {
+      setPupilData(null); // Clear pupil data if no faces are detected
     }
-  }, [selectedEye, analyzePupilMobile]);
+    updateFPS(); // Update FPS after processing
+  }, [selectedEye, analyzePupilMobile]); // Added analyzePupilMobile as a dependency
 
+  // Start the processing loop for FaceMesh
   const startProcessingLoop = () => {
     const processFrame = async () => {
-      if (faceMeshRef.current && videoRef.current && !isProcessing) {
+      if (faceMeshRef.current && videoRef.current && videoRef.current.readyState >= 2) { // Ensure video is ready
         try {
           setIsProcessing(true);
           await faceMeshRef.current.send({ image: videoRef.current });
-          updateFPS();
         } catch (err) {
+          addDebugLog(`Processing error: ${err.message}`);
           console.error('Processing error:', err);
         } finally {
           setIsProcessing(false);
         }
       }
-      
       processingTimeoutRef.current = setTimeout(processFrame, mobileConfig.processingInterval);
     };
     
     processFrame();
   };
 
-  const loadMediaPipe = async () => {
-    try {
-      console.log('Loading MediaPipe...');
-      
-      // Check if already loaded
-      if (window.FaceMesh) {
-        console.log('MediaPipe already loaded');
-        return;
-      }
-      
-      const faceMeshScript = document.createElement('script');
-      faceMeshScript.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js';
-      document.head.appendChild(faceMeshScript);
-      
-      await new Promise((resolve, reject) => {
-        faceMeshScript.onload = () => {
-          console.log('MediaPipe script loaded');
-          resolve();
-        };
-        faceMeshScript.onerror = () => {
-          console.error('MediaPipe script failed to load');
-          reject(new Error('MediaPipe script failed to load'));
-        };
-        
-        // Timeout after 15 seconds
-        setTimeout(() => {
-          reject(new Error('MediaPipe loading timeout'));
-        }, 15000);
-      });
-      
-      // Wait for FaceMesh to be available
-      let attempts = 0;
-      while (!window.FaceMesh && attempts < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      
-      if (!window.FaceMesh) {
-        throw new Error('MediaPipe FaceMesh not available after loading');
-      }
-      
-      console.log('MediaPipe FaceMesh available');
-      
-    } catch (err) {
-      console.error('MediaPipe loading error:', err);
-      throw new Error(`MediaPipe initialization failed: ${err.message}`);
+  // Reset and retry function for error recovery
+  const resetAndRetry = useCallback(() => {
+    addDebugLog('Resetting and retrying...');
+    setError(null);
+    setIsLoading(true);
+    setLibrariesLoaded(false);
+    setCameraPermission('prompt');
+    setPupilData(null);
+    setFps(0);
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
     }
-  };
+    if (faceMeshRef.current) {
+      faceMeshRef.current.close();
+      faceMeshRef.current = null;
+    }
+    // Clear video stream if any
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks();
+      tracks.forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    initializeLibraries();
+  }, []);
 
-  const initializeLibraries = async () => {
-    try {
-      console.log('Starting library initialization...');
-      setIsLoading(true);
-      setError(null);
-      
-      // Load libraries in parallel for better performance
-      await Promise.all([
-        loadMediaPipe(),
-        loadOpenCV()
-      ]);
-      
-      console.log('Libraries loaded, setting up MediaPipe...');
-      
-      // Now setup MediaPipe with the loaded library
-      const faceMesh = new window.FaceMesh({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`;
-        }
-      });
-      
-      faceMesh.setOptions({
-        maxNumFaces: mobileConfig.maxFaces,
-        refineLandmarks: false,
-        minDetectionConfidence: mobileConfig.minDetectionConfidence,
-        minTrackingConfidence: mobileConfig.minTrackingConfidence
-      });
-      
-      faceMesh.onResults(onFaceMeshResults);
-      faceMeshRef.current = faceMesh;
-      
-      setLibrariesLoaded(true);
-      setIsLoading(false);
-      console.log('All libraries initialized successfully');
-      
-    } catch (err) {
-      console.error('Error initializing libraries:', err);
-      setError(`Failed to initialize: ${err.message}`);
-      setIsLoading(false);
-      setLibrariesLoaded(false);
-    }
-  };
+  // Effect hook for component lifecycle
+  useEffect(() => {
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream; // More robust iOS detection
+    setIsIOSDevice(iOS);
+    detectDeviceCapabilities();
+    initializeLibraries();
+    
+    return () => {
+      if (faceMeshRef.current) {
+        faceMeshRef.current.close();
+      }
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
+      window.removeEventListener('devicemotion', handleMotionEvent);
+      // Stop camera tracks on unmount
+      if (videoRef.current && videoRef.current.srcObject) {
+        const tracks = videoRef.current.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array means this runs once on mount and cleanup on unmount
 
   if (error) {
     return (
@@ -536,7 +633,6 @@ const MobilePupilTracker = () => {
     );
   }
 
-  // Show loading screen while libraries load
   if (isLoading || !librariesLoaded) {
     return (
       <div className="flex items-center justify-center h-96 bg-blue-50 border border-blue-200 rounded-lg m-4">
@@ -554,7 +650,6 @@ const MobilePupilTracker = () => {
     );
   }
 
-  // Show camera permission prompt (iOS pattern from your app)
   if (cameraPermission === 'prompt') {
     return (
       <div className="max-w-md mx-auto p-4 bg-white rounded-lg shadow-lg">
@@ -615,7 +710,18 @@ const MobilePupilTracker = () => {
       <div className="mb-4 text-xs text-gray-600 bg-gray-50 p-2 rounded">
         <div>Device: {deviceInfo.isMobile ? 'Mobile' : 'Desktop'} {isIOSDevice ? '(iOS)' : ''}</div>
         <div>FPS: {fps} | Processing: {isProcessing ? 'Active' : 'Idle'}</div>
+        <div>Libraries: {librariesLoaded ? 'Loaded' : 'Loading'}</div>
       </div>
+      
+      {/* Debug Log */}
+      {debugLog.length > 0 && (
+        <div className="mb-4 text-xs text-gray-600 bg-yellow-50 p-2 rounded max-h-20 overflow-y-auto">
+          <div className="font-semibold mb-1">Debug Log:</div>
+          {debugLog.map((log, index) => (
+            <div key={index} className="font-mono text-xs">{log}</div>
+          ))}
+        </div>
+      )}
       
       <div className="mb-4 flex justify-center space-x-2">
         <button
@@ -643,7 +749,7 @@ const MobilePupilTracker = () => {
       <div className="relative mb-4">
         <video
           ref={videoRef}
-          className="hidden"
+          className="hidden" // Keep video hidden but ensure it's rendering for processing
           width={mobileConfig.videoWidth}
           height={mobileConfig.videoHeight}
           autoPlay
