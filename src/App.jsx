@@ -14,7 +14,7 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingData, setRecordingData] = useState([]);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [showGraph, setShowGraph] = useState(false);
+  const [showGraph, setShowGraph] = useState(false); // Initially false
   const [currentPupilData, setCurrentPupilData] = useState(null);
   const [focusMode, setFocusMode] = useState('both'); // 'both', 'left', 'right'
   
@@ -130,7 +130,8 @@ function App() {
 
         faceMesh.setOptions({
           maxNumFaces: 1,
-          refineLandmarks: true,
+          // IMPORTANT: refineLandmarks must be true for iris landmarks (468-477) to be available
+          refineLandmarks: true, 
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
@@ -193,7 +194,6 @@ function App() {
       src.delete();
       gray.delete();
       
-      console.log(`Pupil detection result (${focusMode} mode):`, result);
       return result;
       
     } catch (error) {
@@ -252,15 +252,15 @@ function App() {
       // More aggressive morphological operations for focused eye
       const kernelSize = focusMode === eye ? 5 : 3;
       const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
-      const morphed = new window.cv.Mat();
+      let morphed = new window.cv.Mat(); // Changed to let from const
       window.cv.morphologyEx(thresh, morphed, window.cv.MORPH_CLOSE, kernel);
       
       if (focusMode === eye) {
         // Additional processing for focused eye
         const opened = new window.cv.Mat();
         window.cv.morphologyEx(morphed, opened, window.cv.MORPH_OPEN, kernel);
-        morphed.delete();
-        morphed = opened;
+        morphed.delete(); // Delete the old morphed Mat
+        morphed = opened; // Assign the new opened Mat
       }
       
       const contours = new window.cv.MatVector();
@@ -314,7 +314,7 @@ function App() {
       blurred.delete();
       thresh.delete();
       kernel.delete();
-      morphed.delete();
+      morphed.delete(); // Ensure this is deleted correctly
       contours.delete();
       hierarchy.delete();
       
@@ -348,6 +348,7 @@ function App() {
       const landmarks = results.multiFaceLandmarks[0];
       
       // Draw iris landmarks based on focus mode
+      // This will only draw if refineLandmarks is true in MediaPipe initialization
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
       // Detect pupils if OpenCV is loaded
@@ -381,7 +382,6 @@ function App() {
             
             setRecordingData(prev => {
               const newData = [...prev, dataPoint];
-              console.log('Recording data point:', dataPoint, 'Total points:', newData.length);
               return newData;
             });
           }
@@ -467,6 +467,7 @@ function App() {
 
   // Enhanced iris landmark drawing with focus mode
   const drawIrisLandmarks = (ctx, landmarks, width, height) => {
+    // These indices are for iris landmarks, available only when refineLandmarks is true
     const leftIris = [468, 469, 470, 471, 472];
     const rightIris = [473, 474, 475, 476, 477];
 
@@ -480,12 +481,14 @@ function App() {
       ctx.beginPath();
       leftIris.forEach((index, i) => {
         const point = landmarks[index];
-        const x = point.x * width;
-        const y = point.y * height;
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
+        if (point) { // Check if landmark exists
+          const x = point.x * width;
+          const y = point.y * height;
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
         }
       });
       ctx.closePath();
@@ -494,10 +497,12 @@ function App() {
 
       // Center point
       ctx.fillStyle = isLeftFocused ? '#00ff00' : '#006600';
-      const leftCenter = landmarks[468];
-      ctx.beginPath();
-      ctx.arc(leftCenter.x * width, leftCenter.y * height, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
-      ctx.fill();
+      const leftCenter = landmarks[468]; // Use a specific landmark for the center
+      if (leftCenter) {
+        ctx.beginPath();
+        ctx.arc(leftCenter.x * width, leftCenter.y * height, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
+        ctx.fill();
+      }
     }
 
     // Draw right iris (dimmed if not focused)
@@ -510,12 +515,14 @@ function App() {
       ctx.beginPath();
       rightIris.forEach((index, i) => {
         const point = landmarks[index];
-        const x = point.x * width;
-        const y = point.y * height;
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
+        if (point) { // Check if landmark exists
+          const x = point.x * width;
+          const y = point.y * height;
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
         }
       });
       ctx.closePath();
@@ -523,10 +530,12 @@ function App() {
       ctx.stroke();
 
       ctx.fillStyle = isRightFocused ? '#ff0000' : '#660000';
-      const rightCenter = landmarks[473];
-      ctx.beginPath();
-      ctx.arc(rightCenter.x * width, rightCenter.y * height, isRightFocused ? 4 : 3, 0, 2 * Math.PI);
-      ctx.fill();
+      const rightCenter = landmarks[473]; // Use a specific landmark for the center
+      if (rightCenter) {
+        ctx.beginPath();
+        ctx.arc(rightCenter.x * width, rightCenter.y * height, isRightFocused ? 4 : 3, 0, 2 * Math.PI);
+        ctx.fill();
+      }
     }
   };
 
@@ -538,7 +547,7 @@ function App() {
     }
 
     const video = videoRef.current;
-    if (video.readyState >= 2) {
+    if (video.readyState >= 2) { // Ensure video is ready
       try {
         await faceDetectionRef.current.send({ image: video });
       } catch (err) {
@@ -567,7 +576,8 @@ function App() {
     if (isRecording) {
       recordingStartTime.current = Date.now();
       setRecordingTime(0);
-      setRecordingData([]);
+      setRecordingData([]); // Clear data at the start of a new recording
+      setShowGraph(false); // Hide graph when starting a new recording
       
       recordingIntervalRef.current = setInterval(() => {
         const elapsed = (Date.now() - recordingStartTime.current) / 1000;
@@ -588,7 +598,7 @@ function App() {
         clearInterval(recordingIntervalRef.current);
       }
     };
-  }, [isRecording]);
+  }, [isRecording]); // Dependency on isRecording ensures effect runs when recording state changes
 
   const startRecording = () => {
     if (!isOpenCVLoaded) {
@@ -601,18 +611,21 @@ function App() {
     }
     console.log(`Starting recording in ${focusMode} mode...`);
     setIsRecording(true);
-    setShowGraph(false);
-    setRecordingData([]);
   };
 
-  const stopRecording = () => {
+  const stopRecording = useCallback(() => {
     console.log('Stopping recording...');
     setIsRecording(false);
-    // Always show graph after recording completes
-    setTimeout(() => {
+    // Show graph immediately after recording stops if there's data
+    if (recordingData.length > 0) {
       setShowGraph(true);
-    }, 500); // Small delay to ensure data is processed
-  };
+    } else {
+      setShowGraph(false); // Ensure graph is hidden if no data was recorded
+    }
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+    }
+  }, [recordingData.length]); // Add recordingData.length as a dependency for stopRecording
 
   const startCamera = async () => {
     setIsLoading(true);
@@ -701,12 +714,14 @@ function App() {
     }
     setIsStreamActive(false);
     setIsRecording(false);
-    setShowGraph(false);
+    setShowGraph(false); // Hide graph when camera is stopped
+    setRecordingData([]); // Clear recording data when camera is stopped
   };
 
   const switchCamera = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
     if (isStreamActive) {
+      // Restart camera with new facing mode
       startCamera();
     }
   };
@@ -960,103 +975,11 @@ function App() {
                   <span>Stop ({(5 - recordingTime).toFixed(1)}s)</span>
                 </button>
               )}
-              
-        {/* Graph Display */}
-        {showGraph && recordingData.length > 0 && (
-          <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto">
-            <h3 className="text-lg font-bold mb-4 text-center">
-              📈 Pupil Size Over Time - {getFocusModeLabel()}
-            </h3>
-            <div className="relative h-64 bg-gray-800 rounded-lg p-4">
-              <svg width="100%" height="100%" viewBox="0 0 400 200" className="overflow-visible">
-                {/* Grid lines */}
-                <defs>
-                  <pattern id="grid" width="40" height="20" patternUnits="userSpaceOnUse">
-                    <path d="M 40 0 L 0 0 0 20" fill="none" stroke="#374151" strokeWidth="1"/>
-                  </pattern>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#grid)" />
-                
-                {/* Data lines */}
-                {recordingData.length > 1 && (
-                  <>
-                    {/* Left eye data - only if tracking left */}
-                    {(focusMode === 'both' || focusMode === 'left') && (
-                      <polyline
-                        fill="none"
-                        stroke="#00ffff"
-                        strokeWidth={focusMode === 'left' ? 4 : 3}
-                        points={recordingData.map((d, i) => 
-                          `${(d.time / 5) * 400},${200 - Math.min((d.left / 50) * 180, 180)}`
-                        ).join(' ')}
-                      />
-                    )}
-                    {/* Right eye data - only if tracking right */}
-                    {(focusMode === 'both' || focusMode === 'right') && (
-                      <polyline
-                        fill="none"
-                        stroke="#ffff00"
-                        strokeWidth={focusMode === 'right' ? 4 : 3}
-                        points={recordingData.map((d, i) => 
-                          `${(d.time / 5) * 400},${200 - Math.min((d.right / 50) * 180, 180)}`
-                        ).join(' ')}
-                      />
-                    )}
-                  </>
-                )}
-                
-                {/* Labels */}
-                <text x="10" y="15" fill="#9ca3af" fontSize="12">Pupil Size (px)</text>
-                <text x="320" y="195" fill="#9ca3af" fontSize="12">Time (s)</text>
-              </svg>
-            </div>
-            
-            {/* Legend - only show relevant eyes */}
-            <div className="flex justify-center space-x-6 mt-2">
-              {(focusMode === 'both' || focusMode === 'left') && (
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-cyan-400 rounded"></div>
-                  <span className="text-sm text-gray-300">Left Eye</span>
-                </div>
-              )}
-              {(focusMode === 'both' || focusMode === 'right') && (
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-yellow-400 rounded"></div>
-                  <span className="text-sm text-gray-300">Right Eye</span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Debug Info - Show if no data was recorded */}
-        {!isRecording && recordingData.length === 0 && isStreamActive && (
-          <div className="bg-yellow-900 border border-yellow-600 rounded-xl p-4 max-w-2xl mx-auto">
-            <div className="flex items-start space-x-3">
-              <AlertCircle size={20} className="text-yellow-400 mt-0.5 flex-shrink-0" />
-              <div>
-                <h4 className="font-medium text-yellow-400 mb-2">No Recording Data</h4>
-                <p className="text-sm text-yellow-100 mb-2">
-                  If you just completed a recording but don't see results, try:
-                </p>
-                <ul className="text-sm text-yellow-100 space-y-1 list-disc list-inside">
-                  <li>Make sure your face is well-lit and clearly visible</li>
-                  <li>Position yourself so both eyes are in the camera view</li>
-                  <li>Wait for both OpenCV ✓ and MediaPipe ✓ to be ready</li>
-                  <li>Try recording again with better lighting</li>
-                </ul>
-                <p className="text-xs text-yellow-200 mt-2">
-                  Debug: Check browser console (F12) for detailed error messages
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
             </div>
           )}
         </div>
 
-        {/* Results Section - Always visible after recording */}
+        {/* Results Section - Visible after recording if data exists */}
         {!isRecording && recordingData.length > 0 && (
           <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto border-2 border-green-600">
             <div className="flex items-center justify-between mb-4">
@@ -1137,7 +1060,7 @@ function App() {
           </div>
         )}
 
-        {/* Graph Display */}
+        {/* Graph Display - Render only if showGraph is true and recordingData exists */}
         {showGraph && recordingData.length > 0 && (
           <div className="bg-gray-900 rounded-xl p-4 max-w-2xl mx-auto">
             <h3 className="text-lg font-bold mb-4 text-center">
@@ -1235,6 +1158,30 @@ function App() {
               <p className="text-xs text-gray-500 mt-1">
                 Focus Mode: {getFocusModeLabel()}
               </p>
+            </div>
+          </div>
+        )}
+
+        {/* Debug Info - Show if no data was recorded */}
+        {!isRecording && recordingData.length === 0 && isStreamActive && (
+          <div className="bg-yellow-900 border border-yellow-600 rounded-xl p-4 max-w-2xl mx-auto">
+            <div className="flex items-start space-x-3">
+              <AlertCircle size={20} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <h4 className="font-medium text-yellow-400 mb-2">No Recording Data</h4>
+                <p className="text-sm text-yellow-100 mb-2">
+                  If you just completed a recording but don't see results, try:
+                </p>
+                <ul className="text-sm text-yellow-100 space-y-1 list-disc list-inside">
+                  <li>Make sure your face is well-lit and clearly visible</li>
+                  <li>Position yourself so both eyes are in the camera view</li>
+                  <li>Wait for both OpenCV ✓ and MediaPipe ✓ to be ready</li>
+                  <li>Try recording again with better lighting</li>
+                </ul>
+                <p className="text-xs text-yellow-200 mt-2">
+                  Debug: Check browser console (F12) for detailed error messages
+                </p>
+              </div>
             </div>
           </div>
         )}
