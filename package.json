@@ -2,10 +2,13 @@
   "name": "iris-pupil-tracker",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "vite",
+    "serve": "vite preview"
   },
   "dependencies": {
     "@mediapipe/face_mesh": "^0.4.1633559619",
