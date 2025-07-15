@@ -1,42 +1,66 @@
-import React, { useState, useRef } from 'react';
-import Header from './components/Header';
-import VideoPlayer from './components/VideoPlayer';
-import RecorderControls from './components/RecorderControls';
-import GraphView from './components/GraphView';
-import KalmanFilter from './utils/KalmanFilter';
-import { analyzePupilRegion } from './utils/pupilAnalyzer';
+import React, { useEffect, useRef } from 'react';
+import './App.css';
 
 function App() {
-  const [recording, setRecording] = useState(false);
-  const [recordedSizes, setRecordedSizes] = useState([]);
-  const kalman = useRef(new KalmanFilter());
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
 
-  const handleLandmarks = (landmarks) => {
-    const video = document.querySelector('video');
-    const size = analyzePupilRegion(video, landmarks);
-    if (size && recording) {
-      const smoothed = kalman.current.update(size);
-      setRecordedSizes(prev => [...prev, smoothed]);
-    }
-  };
+  // Initialize camera once
+  useEffect(() => {
+    const setupCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch (error) {
+        console.error('Camera error:', error);
+      }
+    };
 
-  const handleStart = () => {
-    setRecordedSizes([]);
-    setRecording(true);
-  };
+    setupCamera();
 
-  const handleStop = () => {
-    setRecording(false);
-  };
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  // Run OpenCV or draw loop
+  useEffect(() => {
+    const process = () => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+
+      if (video && canvas && ctx && video.readyState === 4) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // Draw current video frame onto canvas
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // TODO: Add OpenCV pupil detection logic here
+        // Example: analyzePupilRegion(canvas)
+      }
+
+      requestAnimationFrame(process);
+    };
+
+    requestAnimationFrame(process);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Header />
-      <main className="p-4">
-        <VideoPlayer onLandmarks={handleLandmarks} />
-        <RecorderControls onStart={handleStart} onStop={handleStop} isRecording={recording} />
-        {recordedSizes.length > 0 && <GraphView data={recordedSizes} />}
-      </main>
+    <div className="app">
+      <h1>Iris Pupil Tracker</h1>
+      <div className="video-wrapper">
+        <video ref={videoRef} className="video" playsInline muted></video>
+        <canvas ref={canvasRef} className="canvas" />
+      </div>
     </div>
   );
 }
