@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, CameraOff, RotateCcw, AlertCircle, ZoomIn, ZoomOut, Play, Square, BarChart3, Eye } from 'lucide-react';
 
 // Basic 1D Kalman Filter implementation
-// This filter will smooth noisy measurements over time.
 class KalmanFilter {
   constructor(Q, R) {
     this.Q = Q; // Process noise covariance
@@ -11,42 +10,34 @@ class KalmanFilter {
     this.P = 1; // Error covariance
   }
 
-  // Initialize the filter with an initial state
   init(initial_state) {
     this.x = initial_state;
     this.P = 1; // High initial uncertainty
   }
 
-  // Predict the next state based on the current state
   predict() {
-    // No external control input (u) or state transition (A) in this simple model,
-    // so predicted state is current state.
-    // Predicted error covariance: P_k = P_{k-1} + Q
     this.P = this.P + this.Q;
   }
 
-  // Update the state estimate using a new measurement
   update(measurement) {
-    // Kalman Gain: K = P / (P + R)
     const K = this.P / (this.P + this.R);
-    // Updated state estimate: x_k = x_{k-1} + K * (measurement - x_{k-1})
     this.x = this.x + K * (measurement - this.x);
-    // Updated error covariance: P_k = (1 - K) * P_{k-1}
     this.P = (1 - K) * this.P;
     return this.x;
   }
 }
 
+// Define drawing helpers outside of App for stability if possible,
+// or use useCallback with their dependencies.
+// For simplicity in this restructure, keeping them inside App but ensuring order.
+
 function App() {
+  const [loadingPhase, setLoadingPhase] = useState('Initializing...'); // 'Initializing...', 'Loading OpenCV...', 'Loading MediaPipe...', 'Ready'
   const [isStreamActive, setIsStreamActive] = useState(false);
   const [error, setError] = useState(null);
   const [facingMode, setFacingMode] = useState('user');
-  const [isLoading, setIsLoading] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState('');
   const [zoom, setZoom] = useState(1);
-  const [isMediaPipeLoaded, setIsMediaPipeLoaded] = useState(false);
-  const [isMediaPipeInitialized, setIsMediaPipeInitialized] = useState(false);
-  const [isOpenCVLoaded, setIsOpenCVLoaded] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingData, setRecordingData] = useState([]);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -57,20 +48,20 @@ function App() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const canvasRef = useRef(null);
-  const faceDetectionRef = useRef(null);
-  const animationFrameRef = useRef(null);
+  const faceDetectionRef = useRef(null); // MediaPipe FaceMesh instance
+  const animationFrameRef = useRef(null); // For requestAnimationFrame
   const recordingIntervalRef = useRef(null);
   const recordingStartTime = useRef(null);
 
   // Kalman filter instances for left eye (x, y, size) and right eye (x, y, size)
-  const kfLeftX = useRef(new KalmanFilter(0.1, 10)); // Q=process noise, R=measurement noise
+  const kfLeftX = useRef(new KalmanFilter(0.1, 10));
   const kfLeftY = useRef(new KalmanFilter(0.1, 10));
   const kfLeftSize = useRef(new KalmanFilter(0.1, 10));
   const kfRightX = useRef(new KalmanFilter(0.1, 10));
   const kfRightY = useRef(new KalmanFilter(0.1, 10));
   const kfRightSize = useRef(new KalmanFilter(0.1, 10));
 
-  // Detect device type
+  // Detect device type on mount
   useEffect(() => {
     const getUserAgent = () => {
       const ua = navigator.userAgent;
@@ -84,8 +75,8 @@ function App() {
     };
     setDeviceInfo(getUserAgent());
 
+    // Cleanup streams and animation frames on component unmount
     return () => {
-      // Cleanup streams and animation frames on component unmount
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
@@ -98,102 +89,6 @@ function App() {
     };
   }, []);
 
-  // Load OpenCV library
-  useEffect(() => {
-    const loadOpenCV = () => {
-      console.log('Loading OpenCV...');
-      const script = document.createElement('script');
-      script.src = 'https://docs.opencv.org/4.8.0/opencv.js';
-      script.async = true;
-      script.onload = () => {
-        console.log('OpenCV script loaded, waiting for cv to be ready...');
-        const checkCV = () => {
-          if (window.cv && window.cv.Mat) {
-            console.log('OpenCV is ready!');
-            setIsOpenCVLoaded(true);
-          } else {
-            setTimeout(checkCV, 100); // Wait for cv to be fully initialized
-          }
-        };
-        checkCV();
-      };
-      script.onerror = (error) => {
-        console.error('Failed to load OpenCV:', error);
-        setError('Failed to load OpenCV library');
-      };
-      document.head.appendChild(script);
-    };
-
-    loadOpenCV();
-  }, []);
-
-  // Load MediaPipe Face Mesh library
-  useEffect(() => {
-    const loadMediaPipe = async () => {
-      try {
-        console.log('Loading MediaPipe scripts...');
-        
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js';
-        script.crossOrigin = 'anonymous';
-        
-        script.onload = () => {
-          console.log('MediaPipe script loaded successfully');
-          setIsMediaPipeLoaded(true);
-        };
-        
-        script.onerror = (error) => {
-          console.error('Failed to load MediaPipe script:', error);
-          setError('Failed to load MediaPipe libraries');
-        };
-        
-        document.head.appendChild(script);
-      } catch (err) {
-        console.error('Error in loadMediaPipe:', err);
-        setError('Failed to initialize MediaPipe');
-      }
-    };
-
-    loadMediaPipe();
-  }, []);
-
-  // Initialize MediaPipe Face Mesh model
-  useEffect(() => {
-    if (!isMediaPipeLoaded || !window.FaceMesh) {
-      return;
-    }
-
-    const initializeMediaPipe = async () => {
-      try {
-        console.log('Initializing MediaPipe Face Mesh...');
-        
-        const faceMesh = new window.FaceMesh({
-          locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-          }
-        });
-
-        faceMesh.setOptions({
-          maxNumFaces: 1,
-          refineLandmarks: true, // Crucial for obtaining iris landmarks (indices 468-477)
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
-
-        faceMesh.onResults(onFaceMeshResults);
-        faceDetectionRef.current = faceMesh;
-        
-        console.log('MediaPipe Face Mesh initialized successfully');
-        setIsMediaPipeInitialized(true);
-      } catch (err) {
-        console.error('Failed to initialize MediaPipe:', err);
-        setError('Failed to initialize face detection');
-      }
-    };
-
-    initializeMediaPipe();
-  }, [isMediaPipeLoaded]);
-
   // Helper function to calculate the bounding circle for a set of landmarks
   const getIrisBoundingCircle = useCallback((landmarks, indices, width, height) => {
     if (!landmarks || indices.length === 0) return null;
@@ -201,7 +96,6 @@ function App() {
     let sumX = 0, sumY = 0;
     let validPoints = 0;
 
-    // Calculate center of the iris landmarks
     indices.forEach(index => {
       const point = landmarks[index];
       if (point) {
@@ -218,7 +112,6 @@ function App() {
     const centerX = sumX / validPoints;
     const centerY = sumY / validPoints;
     
-    // Calculate radius based on the furthest point from the center
     let maxDistance = 0;
     indices.forEach(index => {
       const point = landmarks[index];
@@ -230,7 +123,6 @@ function App() {
       }
     });
 
-    // Add a small buffer to the radius to ensure the pupil is fully contained
     const radius = maxDistance + 2; 
 
     return { centerX, centerY, radius };
@@ -238,18 +130,20 @@ function App() {
 
   // Core pupil detection logic using OpenCV
   const getEyeRegionAndPupil = useCallback((grayMat, landmarks, eye, width, height) => {
+    // Add window.cv check here as this function relies heavily on it
+    if (!window.cv) {
+      console.error("OpenCV (cv) is not available.");
+      return { size: 0, center: null, region: null, confidence: 0 };
+    }
     try {
-      // MediaPipe Iris Landmarks for precise ROI
       const irisIndices = eye === 'left' ? [468, 469, 470, 471, 472] : [473, 474, 475, 476, 477];
-      
       const irisCircle = getIrisBoundingCircle(landmarks, irisIndices, width, height);
 
       if (!irisCircle) {
-        console.log(`No valid iris circle found for ${eye} eye.`);
+        // console.log(`No valid iris circle found for ${eye} eye.`); // Keep this for debugging if needed
         return { size: 0, center: null, region: null, confidence: 0 };
       }
 
-      // Define ROI based on the iris bounding circle with minimal padding
       const padding = focusMode === eye ? 5 : 3; 
       const eyeRegion = {
         x: Math.max(0, Math.floor(irisCircle.centerX - irisCircle.radius - padding)),
@@ -258,25 +152,20 @@ function App() {
         height: Math.min(height - Math.floor(irisCircle.centerY - irisCircle.radius - padding), Math.floor(irisCircle.radius * 2 + 2 * padding))
       };
       
-      // Ensure ROI is not too small
       if (eyeRegion.width < 10 || eyeRegion.height < 10) { 
-        console.log(`Eye region too small for ${eye} eye:`, eyeRegion);
+        // console.log(`Eye region too small for ${eye} eye:`, eyeRegion); // Keep this for debugging if needed
         return { size: 0, center: null, region: eyeRegion, confidence: 0 };
       }
       
       const eyeROI = grayMat.roi(new window.cv.Rect(eyeRegion.x, eyeRegion.y, eyeRegion.width, eyeRegion.height));
       
-      // Apply Gaussian blur to reduce noise
       const blurred = new window.cv.Mat();
-      const blurSize = focusMode === eye ? 7 : 5; // More blur for focused eye
+      const blurSize = focusMode === eye ? 7 : 5;
       window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(blurSize, blurSize), 0);
       
-      // Adaptive thresholding to isolate dark pupil
       const thresh = new window.cv.Mat();
-      const thresholdValue = focusMode === eye ? 30 : 35; // Lower threshold for darker pupil
       window.cv.adaptiveThreshold(blurred, thresh, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
       
-      // Morphological operations (closing then opening) to refine pupil shape
       const kernelSize = focusMode === eye ? 3 : 2; 
       const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(kernelSize, kernelSize));
       let morphed = new window.cv.Mat(); 
@@ -289,7 +178,6 @@ function App() {
         morphed = opened; 
       }
       
-      // Find contours in the morphed image
       const contours = new window.cv.MatVector();
       const hierarchy = new window.cv.Mat();
       window.cv.findContours(morphed, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
@@ -298,7 +186,6 @@ function App() {
       let maxScore = 0;
       let confidence = 0;
       
-      // Define acceptable pupil area range within the iris ROI
       const minArea = focusMode === eye ? 8 : 15; 
       const maxArea = focusMode === eye ? 600 : 400; 
       
@@ -309,7 +196,6 @@ function App() {
         if (area > minArea && area < maxArea) {
           const moments = window.cv.moments(contour);
           const perimeter = window.cv.arcLength(contour, true);
-          // Calculate circularity (1 for perfect circle, 0 for line)
           const circularity = perimeter === 0 ? 0 : 4 * Math.PI * area / (perimeter * perimeter); 
           
           let centerX = 0, centerY = 0;
@@ -320,11 +206,9 @@ function App() {
           
           let currentScore = area * circularity;
           
-          // Factor in proximity to iris center for higher confidence
-          // Calculate distance from detected pupil center (relative to ROI) to iris circle center (relative to ROI)
           const pupilRelativeX = centerX;
           const pupilRelativeY = centerY;
-          const irisCircleRelativeX = irisCircle.radius + padding; // Iris circle center relative to ROI top-left
+          const irisCircleRelativeX = irisCircle.radius + padding;
           const irisCircleRelativeY = irisCircle.radius + padding;
           
           const distFromIrisCenter = Math.sqrt(
@@ -332,33 +216,30 @@ function App() {
             Math.pow(pupilRelativeY - irisCircleRelativeY, 2)
           );
           
-          // Max allowed distance from iris center for a good pupil detection
           const maxAllowedDist = irisCircle.radius * 0.5; 
           
           if (distFromIrisCenter <= maxAllowedDist) {
-            currentScore *= (1 + (1 - (distFromIrisCenter / maxAllowedDist)) * 0.5); // Boost score if central
+            currentScore *= (1 + (1 - (distFromIrisCenter / maxAllowedDist)) * 0.5);
           } else {
-            currentScore *= 0.5; // Penalize if too far off-center
+            currentScore *= 0.5;
           }
 
-          const minCircularity = focusMode === eye ? 0.4 : 0.5; // Stricter circularity requirement
+          const minCircularity = focusMode === eye ? 0.4 : 0.5;
           if (currentScore > maxScore && circularity > minCircularity) {
             maxScore = currentScore;
             bestPupil = {
               size: Math.sqrt(area / Math.PI) * 2,
               center: {
-                x: eyeRegion.x + centerX, // Convert back to full video coordinates
+                x: eyeRegion.x + centerX,
                 y: eyeRegion.y + centerY
               }
             };
-            // Confidence based on normalized score (adjust scaling factor as needed)
             confidence = Math.min(100, Math.floor((currentScore / (focusMode === eye ? 1500 : 1000)) * 100)); 
           }
         }
-        contour.delete(); // Release memory for each contour
+        contour.delete();
       }
       
-      // Cleanup OpenCV Mats
       eyeROI.delete();
       blurred.delete();
       thresh.delete();
@@ -390,7 +271,6 @@ function App() {
     try {
       const video = videoRef.current;
       
-      // Create a temporary canvas to draw the current video frame
       const tempCanvas = document.createElement('canvas');
       const tempCtx = tempCanvas.getContext('2d');
       tempCanvas.width = video.videoWidth;
@@ -398,11 +278,9 @@ function App() {
       
       tempCtx.drawImage(video, 0, 0);
       
-      // Convert canvas image data to OpenCV Mat
       const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const src = window.cv.matFromImageData(imageData);
       
-      // Convert to grayscale for pupil detection
       const gray = new window.cv.Mat();
       window.cv.cvtColor(src, gray, window.cv.COLOR_RGBA2GRAY);
       
@@ -413,12 +291,10 @@ function App() {
         const rawLeftPupil = getEyeRegionAndPupil(gray, landmarks, 'left', tempCanvas.width, tempCanvas.height);
         
         if (rawLeftPupil && rawLeftPupil.center) {
-          // Initialize Kalman filters if this is the first valid detection
           if (kfLeftX.current.x === 0 && rawLeftPupil.center.x !== 0) kfLeftX.current.init(rawLeftPupil.center.x);
           if (kfLeftY.current.x === 0 && rawLeftPupil.center.y !== 0) kfLeftY.current.init(rawLeftPupil.center.y);
           if (kfLeftSize.current.x === 0 && rawLeftPupil.size !== 0) kfLeftSize.current.init(rawLeftPupil.size);
 
-          // Predict and update Kalman filters with raw measurements
           kfLeftX.current.predict();
           kfLeftY.current.predict();
           kfLeftSize.current.predict();
@@ -443,12 +319,10 @@ function App() {
         const rawRightPupil = getEyeRegionAndPupil(gray, landmarks, 'right', tempCanvas.width, tempCanvas.height);
 
         if (rawRightPupil && rawRightPupil.center) {
-          // Initialize Kalman filters if this is the first valid detection
           if (kfRightX.current.x === 0 && rawRightPupil.center.x !== 0) kfRightX.current.init(rawRightPupil.center.x);
           if (kfRightY.current.x === 0 && rawRightPupil.center.y !== 0) kfRightY.current.init(rawRightPupil.center.y);
           if (kfRightSize.current.x === 0 && rawRightPupil.size !== 0) kfRightSize.current.init(rawRightPupil.size);
 
-          // Predict and update Kalman filters with raw measurements
           kfRightX.current.predict();
           kfRightY.current.predict();
           kfRightSize.current.predict();
@@ -468,7 +342,6 @@ function App() {
         }
       }
       
-      // Fill in default values for non-focused eyes if only one eye is tracked
       if (focusMode === 'left') {
         result.right = { size: 0, center: null, region: null, confidence: 0 };
       } else if (focusMode === 'right') {
@@ -491,14 +364,12 @@ function App() {
     const scaleX = canvasWidth / videoWidth;
     const scaleY = canvasHeight / videoHeight;
     
-    // Helper to get color based on confidence
     const getConfidenceColor = (confidence) => {
-      if (confidence > 80) return '#00ff00'; // High confidence: green
-      if (confidence > 50) return '#ffff00'; // Medium confidence: yellow
-      return '#ff0000'; // Low confidence: red
+      if (confidence > 80) return '#00ff00';
+      if (confidence > 50) return '#ffff00';
+      return '#ff0000';
     };
 
-    // Draw left pupil (only if tracking)
     if ((focusMode === 'both' || focusMode === 'left') && pupilData.left?.center && pupilData.left.size > 0) {
       const leftX = pupilData.left.center.x * scaleX;
       const leftY = pupilData.left.center.y * scaleY;
@@ -509,27 +380,24 @@ function App() {
       const strokeColor = getConfidenceColor(leftConfidence);
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = isLeftFocused ? 3 : 2;
-      ctx.fillStyle = `${strokeColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`; // Semi-transparent fill
+      ctx.fillStyle = `${strokeColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`;
 
       ctx.beginPath();
       ctx.arc(leftX, leftY, leftRadius, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
       
-      // Center dot
       ctx.fillStyle = strokeColor;
       ctx.beginPath();
       ctx.arc(leftX, leftY, isLeftFocused ? 3 : 2, 0, 2 * Math.PI);
       ctx.fill();
       
-      // Confidence text
       ctx.fillStyle = '#fff';
       ctx.font = '10px Arial';
       ctx.textAlign = 'center';
       ctx.fillText(`${leftConfidence}%`, leftX, leftY + leftRadius + 12);
     }
     
-    // Draw right pupil (only if tracking)
     if ((focusMode === 'both' || focusMode === 'right') && pupilData.right?.center && pupilData.right.size > 0) {
       const rightX = pupilData.right.center.x * scaleX;
       const rightY = pupilData.right.center.y * scaleY;
@@ -540,7 +408,7 @@ function App() {
       const strokeColor = getConfidenceColor(rightConfidence);
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = isRightFocused ? 3 : 2;
-      ctx.fillStyle = `${strokeColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`; // Semi-transparent fill
+      ctx.fillStyle = `${strokeColor.replace('rgb', 'rgba').replace(')', ', 0.3)')}`;
       
       ctx.beginPath();
       ctx.arc(rightX, rightY, rightRadius, 0, 2 * Math.PI);
@@ -552,7 +420,6 @@ function App() {
       ctx.arc(rightX, rightY, isRightFocused ? 3 : 2, 0, 2 * Math.PI);
       ctx.fill();
 
-      // Confidence text
       ctx.fillStyle = '#fff';
       ctx.font = '10px Arial';
       ctx.textAlign = 'center';
@@ -565,12 +432,11 @@ function App() {
     const leftIrisIndices = [468, 469, 470, 471, 472];
     const rightIrisIndices = [473, 474, 475, 476, 477];
 
-    // Draw left iris circle (dimmed if not focused)
     if (focusMode === 'both' || focusMode === 'left') {
       const leftIrisCircle = getIrisBoundingCircle(landmarks, leftIrisIndices, width, height);
       if (leftIrisCircle) {
         const isLeftFocused = focusMode === 'left';
-        ctx.strokeStyle = isLeftFocused ? '#00ff00' : '#006600'; // Green for left iris
+        ctx.strokeStyle = isLeftFocused ? '#00ff00' : '#006600';
         ctx.lineWidth = isLeftFocused ? 3 : 2;
         ctx.fillStyle = isLeftFocused ? 'rgba(0, 255, 0, 0.15)' : 'rgba(0, 255, 0, 0.05)';
         
@@ -579,7 +445,6 @@ function App() {
         ctx.fill();
         ctx.stroke();
 
-        // Center point
         ctx.fillStyle = isLeftFocused ? '#00ff00' : '#006600';
         ctx.beginPath();
         ctx.arc(leftIrisCircle.centerX, leftIrisCircle.centerY, isLeftFocused ? 4 : 3, 0, 2 * Math.PI);
@@ -587,12 +452,11 @@ function App() {
       }
     }
 
-    // Draw right iris circle (dimmed if not focused)
     if (focusMode === 'both' || focusMode === 'right') {
       const rightIrisCircle = getIrisBoundingCircle(landmarks, rightIrisIndices, width, height);
       if (rightIrisCircle) {
         const isRightFocused = focusMode === 'right';
-        ctx.strokeStyle = isRightFocused ? '#ff0000' : '#660000'; // Red for right iris
+        ctx.strokeStyle = isRightFocused ? '#ff0000' : '#660000';
         ctx.lineWidth = isRightFocused ? 3 : 2;
         ctx.fillStyle = isRightFocused ? 'rgba(255, 0, 0, 0.15)' : 'rgba(255, 0, 0, 0.05)';
         
@@ -609,8 +473,8 @@ function App() {
     }
   }, [focusMode, getIrisBoundingCircle]);
 
+
   // MediaPipe results handler - draws overlays and triggers pupil detection
-  // This function needs to be after drawIrisLandmarks and drawPupilOverlays
   const onFaceMeshResults = useCallback((results) => {
     if (!canvasRef.current || !videoRef.current) return;
 
@@ -618,29 +482,25 @@ function App() {
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
 
-    // Adjust canvas size to match video element's displayed size for correct overlay scaling
     const rect = video.getBoundingClientRect();
     canvas.width = rect.width;
     canvas.height = rect.height;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
       
-      // Draw iris landmarks as circles (viewfinder)
       drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
       
-      // Detect pupils if OpenCV is loaded
-      if (isOpenCVLoaded) {
+      // Only attempt pupil detection if OpenCV is confirmed ready
+      if (window.cv && window.cv.Mat) {
         const pupilData = detectPupils(landmarks);
         if (pupilData) {
-          setCurrentPupilData(pupilData); // Update state for debug display
+          setCurrentPupilData(pupilData);
           
-          // Draw pupil overlays (smoothed)
           drawPupilOverlays(ctx, pupilData, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
           
-          // Record data if recording is active
           if (isRecording) {
             const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
             let dataPoint = {
@@ -648,15 +508,14 @@ function App() {
               timestamp: pupilData.timestamp
             };
             
-            // Add pupil data based on focus mode
             if (focusMode === 'both') {
               dataPoint.left = pupilData.left?.size || 0;
               dataPoint.right = pupilData.right?.size || 0;
             } else if (focusMode === 'left') {
               dataPoint.left = pupilData.left?.size || 0;
-              dataPoint.right = 0; // Not tracking
+              dataPoint.right = 0;
             } else if (focusMode === 'right') {
-              dataPoint.left = 0; // Not tracking
+              dataPoint.left = 0;
               dataPoint.right = pupilData.right?.size || 0;
             }
             
@@ -668,17 +527,18 @@ function App() {
         }
       }
     }
-  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode, drawIrisLandmarks, drawPupilOverlays]); // Dependencies are correct after reordering
+  }, [detectPupils, focusMode, drawIrisLandmarks, drawPupilOverlays, isRecording]);
 
   // Process video frame for MediaPipe
   const processFrame = useCallback(async () => {
-    if (!videoRef.current || !faceDetectionRef.current || !isMediaPipeInitialized || !isStreamActive) {
+    // Only proceed if MediaPipe is fully initialized and stream is active
+    if (!videoRef.current || !faceDetectionRef.current || loadingPhase !== 'Ready' || !isStreamActive) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
     const video = videoRef.current;
-    if (video.readyState >= 2) { // Ensure video is ready before sending to MediaPipe
+    if (video.readyState >= 2) {
       try {
         await faceDetectionRef.current.send({ image: video });
       } catch (err) {
@@ -687,11 +547,103 @@ function App() {
     }
 
     animationFrameRef.current = requestAnimationFrame(processFrame);
-  }, [isMediaPipeInitialized, isStreamActive]);
+  }, [loadingPhase, isStreamActive]);
 
-  // Start MediaPipe processing loop when stream and MediaPipe are ready
+  // Unified useEffect for loading all dependencies
   useEffect(() => {
-    if (isStreamActive && isMediaPipeInitialized) {
+    const loadDependencies = async () => {
+      setError(null);
+      
+      // 1. Load OpenCV
+      setLoadingPhase('Loading OpenCV...');
+      try {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://docs.opencv.org/4.8.0/opencv.js';
+          script.async = true;
+          script.onload = () => {
+            const checkCV = () => {
+              if (window.cv && window.cv.Mat) {
+                console.log('OpenCV is ready!');
+                resolve();
+              } else {
+                setTimeout(checkCV, 100);
+              }
+            };
+            checkCV();
+          };
+          script.onerror = (error) => {
+            console.error('Failed to load OpenCV:', error);
+            reject('Failed to load OpenCV library');
+          };
+          document.head.appendChild(script);
+        });
+      } catch (err) {
+        setError(err);
+        setLoadingPhase('Error');
+        return;
+      }
+
+      // 2. Load MediaPipe Script
+      setLoadingPhase('Loading MediaPipe...');
+      try {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js';
+          script.crossOrigin = 'anonymous';
+          script.onload = () => resolve();
+          script.onerror = (error) => {
+            console.error('Failed to load MediaPipe script:', error);
+            reject('Failed to load MediaPipe libraries');
+          };
+          document.head.appendChild(script);
+        });
+      } catch (err) {
+        setError(err);
+        setLoadingPhase('Error');
+        return;
+      }
+
+      // 3. Initialize MediaPipe Model
+      setLoadingPhase('Initializing MediaPipe...');
+      try {
+        if (!window.FaceMesh) {
+          throw new Error("MediaPipe FaceMesh global not found after script load.");
+        }
+        
+        const faceMesh = new window.FaceMesh({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+          }
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onFaceMeshResults);
+        faceDetectionRef.current = faceMesh;
+        
+        console.log('MediaPipe Face Mesh initialized successfully');
+      } catch (err) {
+        console.error('Failed to initialize MediaPipe:', err);
+        setError('Failed to initialize face detection');
+        setLoadingPhase('Error');
+        return;
+      }
+      
+      setLoadingPhase('Ready'); // All dependencies loaded and initialized
+    };
+
+    loadDependencies();
+  }, [onFaceMeshResults]); // Dependency on onFaceMeshResults as it's a callback and relies on other functions.
+
+  // Start MediaPipe processing loop when dependencies are ready and stream is active
+  useEffect(() => {
+    if (loadingPhase === 'Ready' && isStreamActive) {
       processFrame();
     }
 
@@ -700,24 +652,24 @@ function App() {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isStreamActive, isMediaPipeInitialized, processFrame]);
+  }, [loadingPhase, isStreamActive, processFrame]);
 
   // Recording timer logic
   useEffect(() => {
     if (isRecording) {
       recordingStartTime.current = Date.now();
       setRecordingTime(0);
-      setRecordingData([]); // Clear data at the start of a new recording
-      setShowGraph(false); // Hide graph when starting a new recording
+      setRecordingData([]);
+      setShowGraph(false);
       
       recordingIntervalRef.current = setInterval(() => {
         const elapsed = (Date.now() - recordingStartTime.current) / 1000;
         setRecordingTime(elapsed);
         
-        if (elapsed >= 5) { // Stop recording after 5 seconds
+        if (elapsed >= 5) {
           stopRecording();
         }
-      }, 100); // Update recording time every 100ms
+      }, 100);
     } else {
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
@@ -729,15 +681,11 @@ function App() {
         clearInterval(recordingIntervalRef.current);
       }
     };
-  }, [isRecording, stopRecording]); // Dependency on isRecording and stopRecording
+  }, [isRecording, stopRecording]);
 
   const startRecording = () => {
-    if (!isOpenCVLoaded) {
-      setError('OpenCV not loaded yet. Please wait.');
-      return;
-    }
-    if (!isMediaPipeInitialized) {
-      setError('MediaPipe not initialized yet. Please wait.');
+    if (loadingPhase !== 'Ready') { // Ensure libraries are loaded
+      setError('System not ready. Please wait for initialization.');
       return;
     }
     console.log(`Starting recording in ${focusMode} mode...`);
@@ -747,20 +695,22 @@ function App() {
   const stopRecording = useCallback(() => {
     console.log('Stopping recording...');
     setIsRecording(false);
-    // Show graph immediately after recording stops if there's data
     if (recordingData.length > 0) {
       setShowGraph(true);
     } else {
-      setShowGraph(false); // Ensure graph is hidden if no data was recorded
+      setShowGraph(false);
     }
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
     }
-  }, [recordingData.length]); // Add recordingData.length as a dependency for stopRecording
+  }, [recordingData.length]);
 
   const startCamera = async () => {
-    setIsLoading(true);
     setError(null);
+    if (loadingPhase !== 'Ready') { // Prevent camera start if libraries aren't loaded
+      setError('System not ready. Please wait for initialization.');
+      return;
+    }
 
     try {
       if (streamRef.current) {
@@ -790,7 +740,6 @@ function App() {
       videoRef.current.playsInline = true;
       videoRef.current.autoplay = true;
       
-      // Wait for video metadata to load
       await new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => reject(new Error('Video load timeout')), 10000);
         
@@ -805,7 +754,6 @@ function App() {
         };
       });
 
-      // Attempt to play video
       try {
         await videoRef.current.play();
       } catch (playError) {
@@ -832,8 +780,6 @@ function App() {
       }
       
       setError(errorMessage);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -847,11 +793,10 @@ function App() {
     }
     setIsStreamActive(false);
     setIsRecording(false);
-    setShowGraph(false); // Hide graph when camera is stopped
-    setRecordingData([]); // Clear recording data when camera is stopped
-    setCurrentPupilData(null); // Clear pupil debug data
+    setShowGraph(false);
+    setRecordingData([]);
+    setCurrentPupilData(null);
     
-    // Reset Kalman filters when camera stops
     kfLeftX.current = new KalmanFilter(0.1, 10);
     kfLeftY.current = new KalmanFilter(0.1, 10);
     kfLeftSize.current = new KalmanFilter(0.1, 10);
@@ -863,7 +808,6 @@ function App() {
   const switchCamera = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
     if (isStreamActive) {
-      // Restart camera with new facing mode
       startCamera();
     }
   };
@@ -882,6 +826,34 @@ function App() {
     }
   };
 
+  // Render a loading screen if not ready
+  if (loadingPhase !== 'Ready' && !error) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="animate-spin w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-xl font-medium mb-2">{loadingPhase}</p>
+          <p className="text-sm text-gray-400">Please wait while we set up the tracking system.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Render error screen if there's a critical error during loading
+  if (error && loadingPhase === 'Error') {
+    return (
+      <div className="min-h-screen bg-red-950 text-white flex items-center justify-center p-4">
+        <div className="text-center p-6 bg-red-900 rounded-lg shadow-lg">
+          <AlertCircle size={48} className="mx-auto mb-4 text-red-400" />
+          <h2 className="text-xl font-bold mb-2">Initialization Error</h2>
+          <p className="text-sm text-red-100 mb-4">{error}</p>
+          <p className="text-xs text-red-200">Please try refreshing the page or check your browser console for more details.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Main App content once everything is loaded
   return (
     <div className="min-h-screen bg-black text-white">
       {/* Header */}
@@ -897,7 +869,7 @@ function App() {
           <button
             onClick={switchCamera}
             className="p-2 bg-gray-700 rounded-full hover:bg-gray-600 transition-colors active:scale-95"
-            disabled={isLoading}
+            disabled={loadingPhase !== 'Ready'} // Disable if not fully ready
             aria-label="Switch Camera"
           >
             <RotateCcw size={18} />
@@ -975,21 +947,12 @@ function App() {
           
           {/* Status Overlays */}
           <div className="absolute inset-0 pointer-events-none p-2 md:p-4">
-            {!isStreamActive && !isLoading && (
+            {!isStreamActive && (
               <div className="w-full h-full flex items-center justify-center">
                 <div className="text-center">
                   <Camera size={48} className="mx-auto mb-4 text-gray-400" />
                   <p className="text-gray-400 mb-2 text-sm md:text-base">Ready to track pupils</p>
                   <p className="text-xs md:text-sm text-gray-500">Phase 3: OpenCV + MediaPipe</p>
-                </div>
-              </div>
-            )}
-            
-            {isLoading && (
-              <div className="w-full h-full flex items-center justify-center">
-                <div className="text-center">
-                  <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-                  <p className="text-gray-400 text-sm md:text-base">Starting camera...</p>
                 </div>
               </div>
             )}
@@ -1033,7 +996,7 @@ function App() {
                 <div className="text-white text-xs md:text-sm bg-black bg-opacity-60 px-3 py-1 rounded-full backdrop-blur-sm flex items-center space-x-2">
                   <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
                   <span>
-                    OpenCV: {isOpenCVLoaded ? '✓' : '⏳'} MediaPipe: {isMediaPipeInitialized ? '✓' : '⏳'}
+                    System Ready
                   </span>
                 </div>
               </div>
@@ -1072,7 +1035,7 @@ function App() {
         )}
 
         {/* Error Display */}
-        {error && (
+        {error && loadingPhase !== 'Error' && ( // Only show if not a critical loading error
           <div className="p-3 bg-red-900 border border-red-700 rounded-xl flex items-start space-x-2 max-w-2xl mx-auto">
             <AlertCircle size={18} className="text-red-400 mt-0.5 flex-shrink-0" />
             <p className="text-sm text-red-100">{error}</p>
@@ -1084,11 +1047,11 @@ function App() {
           {!isStreamActive ? (
             <button
               onClick={startCamera}
-              disabled={isLoading}
+              disabled={loadingPhase !== 'Ready'} // Disable if not fully ready
               className="flex items-center space-x-2 px-6 py-3 md:px-8 md:py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-xl transition-all active:scale-95 font-medium text-base md:text-lg"
             >
               <Camera size={20} />
-              <span>{isLoading ? 'Starting...' : 'Start Pupil Tracking'}</span>
+              <span>{loadingPhase === 'Ready' ? 'Start Pupil Tracking' : 'Initializing...'}</span>
             </button>
           ) : (
             <div className="flex flex-wrap justify-center gap-3 md:gap-4">
@@ -1103,7 +1066,7 @@ function App() {
               {!isRecording ? (
                 <button
                   onClick={startRecording}
-                  disabled={!isOpenCVLoaded || !isMediaPipeInitialized}
+                  disabled={loadingPhase !== 'Ready'} // Disable if not fully ready
                   className="flex items-center space-x-2 px-4 py-2 md:px-6 md:py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-xl transition-all active:scale-95 font-medium text-sm md:text-base"
                 >
                   <Play size={18} />
@@ -1314,7 +1277,7 @@ function App() {
             </div>
             
             {/* Stats - only show relevant eyes */}
-            <div className={`grid ${focusMode === 'both' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 mt-4`}>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
               {(focusMode === 'both' || focusMode === 'left') && (
                 <div className="bg-gray-800 rounded-lg p-3 text-center">
                   <p className="text-xs text-gray-400">Left Eye Avg</p>
