@@ -486,66 +486,6 @@ function App() {
     }
   }, [focusMode, getEyeRegionAndPupil]);
 
-  // MediaPipe results handler - draws overlays and triggers pupil detection
-  const onFaceMeshResults = useCallback((results) => {
-    if (!canvasRef.current || !videoRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const video = videoRef.current;
-
-    // Adjust canvas size to match video element's displayed size for correct overlay scaling
-    const rect = video.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings
-
-    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-      const landmarks = results.multiFaceLandmarks[0];
-      
-      // Draw iris landmarks as circles (viewfinder)
-      drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
-      
-      // Detect pupils if OpenCV is loaded
-      if (isOpenCVLoaded) {
-        const pupilData = detectPupils(landmarks);
-        if (pupilData) {
-          setCurrentPupilData(pupilData); // Update state for debug display
-          
-          // Draw pupil overlays (smoothed)
-          drawPupilOverlays(ctx, pupilData, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
-          
-          // Record data if recording is active
-          if (isRecording) {
-            const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
-            let dataPoint = {
-              time: timeElapsed,
-              timestamp: pupilData.timestamp
-            };
-            
-            // Add pupil data based on focus mode
-            if (focusMode === 'both') {
-              dataPoint.left = pupilData.left?.size || 0;
-              dataPoint.right = pupilData.right?.size || 0;
-            } else if (focusMode === 'left') {
-              dataPoint.left = pupilData.left?.size || 0;
-              dataPoint.right = 0; // Not tracking
-            } else if (focusMode === 'right') {
-              dataPoint.left = 0; // Not tracking
-              dataPoint.right = pupilData.right?.size || 0;
-            }
-            
-            setRecordingData(prev => {
-              const newData = [...prev, dataPoint];
-              return newData;
-            });
-          }
-        }
-      }
-    }
-  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode, drawIrisLandmarks, drawPupilOverlays]);
-
   // Draws pupil overlays with confidence-based coloring and text
   const drawPupilOverlays = useCallback((ctx, pupilData, videoWidth, videoHeight, canvasWidth, canvasHeight) => {
     const scaleX = canvasWidth / videoWidth;
@@ -668,6 +608,67 @@ function App() {
       }
     }
   }, [focusMode, getIrisBoundingCircle]);
+
+  // MediaPipe results handler - draws overlays and triggers pupil detection
+  // This function needs to be after drawIrisLandmarks and drawPupilOverlays
+  const onFaceMeshResults = useCallback((results) => {
+    if (!canvasRef.current || !videoRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const video = videoRef.current;
+
+    // Adjust canvas size to match video element's displayed size for correct overlay scaling
+    const rect = video.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawings
+
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+      const landmarks = results.multiFaceLandmarks[0];
+      
+      // Draw iris landmarks as circles (viewfinder)
+      drawIrisLandmarks(ctx, landmarks, canvas.width, canvas.height);
+      
+      // Detect pupils if OpenCV is loaded
+      if (isOpenCVLoaded) {
+        const pupilData = detectPupils(landmarks);
+        if (pupilData) {
+          setCurrentPupilData(pupilData); // Update state for debug display
+          
+          // Draw pupil overlays (smoothed)
+          drawPupilOverlays(ctx, pupilData, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+          
+          // Record data if recording is active
+          if (isRecording) {
+            const timeElapsed = (Date.now() - recordingStartTime.current) / 1000;
+            let dataPoint = {
+              time: timeElapsed,
+              timestamp: pupilData.timestamp
+            };
+            
+            // Add pupil data based on focus mode
+            if (focusMode === 'both') {
+              dataPoint.left = pupilData.left?.size || 0;
+              dataPoint.right = pupilData.right?.size || 0;
+            } else if (focusMode === 'left') {
+              dataPoint.left = pupilData.left?.size || 0;
+              dataPoint.right = 0; // Not tracking
+            } else if (focusMode === 'right') {
+              dataPoint.left = 0; // Not tracking
+              dataPoint.right = pupilData.right?.size || 0;
+            }
+            
+            setRecordingData(prev => {
+              const newData = [...prev, dataPoint];
+              return newData;
+            });
+          }
+        }
+      }
+    }
+  }, [isOpenCVLoaded, isRecording, detectPupils, focusMode, drawIrisLandmarks, drawPupilOverlays]); // Dependencies are correct after reordering
 
   // Process video frame for MediaPipe
   const processFrame = useCallback(async () => {
