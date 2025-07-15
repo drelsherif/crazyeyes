@@ -1,68 +1,69 @@
 import React, { useEffect, useRef } from 'react';
-import './App.css';
+import '@mediapipe/face_mesh';
+import '@mediapipe/camera_utils';
+import '@mediapipe/drawing_utils';
+import { FaceMesh } from '@mediapipe/face_mesh';
+import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 
-function App() {
+const App = () => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const streamRef = useRef(null);
 
-  // Initialize camera once
   useEffect(() => {
-    const setupCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch (error) {
-        console.error('Camera error:', error);
-      }
-    };
+    const videoElement = videoRef.current;
+    const canvasElement = canvasRef.current;
+    const canvasCtx = canvasElement.getContext('2d');
 
-    setupCamera();
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+    });
 
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
 
-  // Run OpenCV or draw loop
-  useEffect(() => {
-    const process = () => {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext('2d');
+    faceMesh.onResults((results) => {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-      if (video && canvas && ctx && video.readyState === 4) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
-        // Draw current video frame onto canvas
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // TODO: Add OpenCV pupil detection logic here
-        // Example: analyzePupilRegion(canvas)
+      if (results.multiFaceLandmarks.length > 0) {
+        const landmarks = results.multiFaceLandmarks[0];
+        drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, { color: '#00FF00', lineWidth: 0.5 });
+        drawLandmarks(canvasCtx, [landmarks[468]], { color: 'blue', radius: 3 });
+        drawLandmarks(canvasCtx, [landmarks[473]], { color: 'blue', radius: 3 });
       }
 
-      requestAnimationFrame(process);
+      canvasCtx.restore();
+    });
+
+    const startCamera = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoElement.srcObject = stream;
+      videoElement.play();
+
+      const camera = new window.Camera(videoElement, {
+        onFrame: async () => {
+          await faceMesh.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480,
+      });
+      camera.start();
     };
 
-    requestAnimationFrame(process);
+    startCamera();
   }, []);
 
   return (
-    <div className="app">
-      <h1>Iris Pupil Tracker</h1>
-      <div className="video-wrapper">
-        <video ref={videoRef} className="video" playsInline muted></video>
-        <canvas ref={canvasRef} className="canvas" />
-      </div>
+    <div className="relative w-full h-screen bg-black">
+      <video ref={videoRef} className="hidden" playsInline></video>
+      <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full" width={640} height={480}></canvas>
     </div>
   );
-}
+};
 
 export default App;
