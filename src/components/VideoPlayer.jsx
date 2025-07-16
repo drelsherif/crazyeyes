@@ -1,4 +1,4 @@
-// components/VideoPlayer.jsx - Fixed Camera Flip (Natural View)
+// components/VideoPlayer.jsx - Fixed Zoom Center & Auto-Focus
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import useCamera from '../hooks/useCamera';
 import useFaceMesh from '../hooks/useFaceMesh';
@@ -43,46 +43,40 @@ function VideoPlayer({ onPupilData }) {
     }
   }, [detectPupil, eyeMode, onPupilData, autoZoom]));
 
-  // Update zoom center based on selected eye mode
+  // Update zoom center based on selected eye mode or nose for general focus
   const updateAutoZoomCenter = useCallback((landmarks) => {
     if (!landmarks) return;
 
     let targetX = 50, targetY = 50;
 
     if (eyeMode === 'left') {
-      // Focus on left eye (landmarks around 468-472)
-      // Note: Since we're flipping horizontally, left eye appears on left side
+      // Focus on left eye (appears on right side of flipped video)
       const leftEyePoints = [468, 469, 470, 471, 472];
       const avgX = leftEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / leftEyePoints.length;
       const avgY = leftEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / leftEyePoints.length;
-      // Flip X coordinate for natural view
-      targetX = (1 - avgX) * 100;
+      // Don't flip X coordinate here - let the video transform handle it
+      targetX = avgX * 100;
       targetY = avgY * 100;
     } else if (eyeMode === 'right') {
-      // Focus on right eye (landmarks around 473-477)
+      // Focus on right eye (appears on left side of flipped video)
       const rightEyePoints = [473, 474, 475, 476, 477];
       const avgX = rightEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / rightEyePoints.length;
       const avgY = rightEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / rightEyePoints.length;
-      // Flip X coordinate for natural view
-      targetX = (1 - avgX) * 100;
+      targetX = avgX * 100;
       targetY = avgY * 100;
     } else {
-      // Focus on center between both eyes
-      const leftEyePoints = [468, 469, 470, 471, 472];
-      const rightEyePoints = [473, 474, 475, 476, 477];
-      const leftAvgX = leftEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / leftEyePoints.length;
-      const leftAvgY = leftEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / leftEyePoints.length;
-      const rightAvgX = rightEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / rightEyePoints.length;
-      const rightAvgY = rightEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / rightEyePoints.length;
-      // Flip X coordinate for natural view
-      targetX = (1 - ((leftAvgX + rightAvgX) / 2)) * 100;
-      targetY = ((leftAvgY + rightAvgY) / 2) * 100;
+      // Focus on nose tip (center reference point) - landmark 1 or 2
+      const noseTip = landmarks[1] || landmarks[2];
+      if (noseTip) {
+        targetX = noseTip.x * 100;
+        targetY = noseTip.y * 100;
+      }
     }
 
     // Smooth transition to new center
     setZoomCenter(prev => ({
-      x: prev.x * 0.9 + targetX * 0.1,
-      y: prev.y * 0.9 + targetY * 0.1
+      x: prev.x * 0.8 + targetX * 0.2,
+      y: prev.y * 0.8 + targetY * 0.2
     }));
   }, [eyeMode]);
 
@@ -99,13 +93,12 @@ function VideoPlayer({ onPupilData }) {
   useCamera(videoRef, handleFrame);
 
   // Handle manual zoom center adjustment (click to focus)
-  // Need to account for the horizontal flip
   const handleVideoClick = useCallback((event) => {
     if (!containerRef.current) return;
     
     const rect = containerRef.current.getBoundingClientRect();
-    // Flip the X coordinate since video is horizontally flipped
-    const x = 100 - ((event.clientX - rect.left) / rect.width) * 100;
+    // For flipped video, we need to get the actual click position
+    const x = ((event.clientX - rect.left) / rect.width) * 100;
     const y = ((event.clientY - rect.top) / rect.height) * 100;
     
     setZoomCenter({ x, y });
@@ -124,6 +117,7 @@ function VideoPlayer({ onPupilData }) {
 
   // Calculate transform style for zoom (includes horizontal flip)
   const getTransformStyle = () => {
+    // For flipped video, we need to adjust the translation
     const translateX = (50 - zoomCenter.x) * zoomLevel;
     const translateY = (50 - zoomCenter.y) * zoomLevel;
     
@@ -241,16 +235,19 @@ function VideoPlayer({ onPupilData }) {
         </button>
       </div>
 
-      {/* Mirror Mode Indicator */}
-      <div className="text-xs text-green-400 bg-green-900 px-3 py-1 rounded">
-        📱 Natural View: Left eye on left, right eye on right
-      </div>
+      {/* Detection Debug Info */}
+      {pupilData && (
+        <div className="text-xs text-gray-400 bg-gray-900 px-3 py-1 rounded">
+          {pupilData.left && `L: ${pupilData.left.size.toFixed(1)}px (${pupilData.left.method}) `}
+          {pupilData.right && `R: ${pupilData.right.size.toFixed(1)}px (${pupilData.right.method})`}
+        </div>
+      )}
 
       {/* Zoom Info */}
       {zoomLevel > 1 && (
         <div className="text-xs text-gray-400 text-center">
           {zoomLevel.toFixed(1)}x zoom • Center: ({zoomCenter.x.toFixed(0)}%, {zoomCenter.y.toFixed(0)}%)
-          {autoZoom && ' • Auto-focus enabled'}
+          {autoZoom && ` • Auto-focus: ${eyeMode === 'both' ? 'nose' : eyeMode + ' eye'}`}
           <br />
           <span className="text-gray-500">Click on video to set zoom center</span>
         </div>
@@ -289,7 +286,7 @@ function VideoPlayer({ onPupilData }) {
           <div 
             className="absolute w-2 h-2 bg-red-500 rounded-full pointer-events-none"
             style={{
-              left: `${100 - zoomCenter.x}%`, // Flip position for display
+              left: `${zoomCenter.x}%`,
               top: `${zoomCenter.y}%`,
               transform: 'translate(-50%, -50%)',
               zIndex: 20
