@@ -1,4 +1,4 @@
-// components/OverlayCanvas.jsx - Fixed for Horizontal Flip
+// components/OverlayCanvas.jsx - Fixed Coordinate Locking
 import React, { useRef, useEffect, memo } from 'react';
 
 const OverlayCanvas = memo(({ 
@@ -25,13 +25,6 @@ const OverlayCanvas = memo(({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Apply horizontal flip to match the flipped video
-    if (isFlipped) {
-      ctx.save();
-      ctx.scale(-1, 1);
-      ctx.translate(-canvas.width, 0);
-    }
-
     // Very thin line widths that won't block the pupil
     const thinLineWidth = Math.max(0.5, zoomLevel * 0.3);
     const extraThinLineWidth = Math.max(0.3, zoomLevel * 0.2);
@@ -42,13 +35,32 @@ const OverlayCanvas = memo(({
     const leftIrisIndices = [468, 469, 470, 471, 472];
     const rightIrisIndices = [473, 474, 475, 476, 477];
 
+    // Helper function to convert landmark coordinates considering flip
+    const getCanvasCoordinates = (landmark) => {
+      let x = landmark.x * canvas.width;
+      let y = landmark.y * canvas.height;
+      
+      // If flipped, mirror the X coordinate
+      if (isFlipped) {
+        x = canvas.width - x;
+      }
+      
+      return { x, y };
+    };
+
     // Helper function to draw minimal pupil indicator
     const drawMinimalPupilIndicator = (irisIndices, pupilSize, color = '#00BFFF', label = '') => {
       if (irisIndices.length === 0) return;
 
-      // Calculate iris center
-      const centerX = irisIndices.reduce((sum, i) => sum + landmarks[i].x, 0) / irisIndices.length * canvas.width;
-      const centerY = irisIndices.reduce((sum, i) => sum + landmarks[i].y, 0) / irisIndices.length * canvas.height;
+      // Calculate iris center with proper coordinate transformation
+      let centerX = 0, centerY = 0;
+      irisIndices.forEach(i => {
+        const coords = getCanvasCoordinates(landmarks[i]);
+        centerX += coords.x;
+        centerY += coords.y;
+      });
+      centerX /= irisIndices.length;
+      centerY /= irisIndices.length;
 
       // Only draw a tiny center dot - no blocking elements
       ctx.fillStyle = color;
@@ -68,15 +80,15 @@ const OverlayCanvas = memo(({
 
         // Position text outside the pupil area to avoid blocking
         const textOffset = (pupilSize / 2) + 15;
-        let textX, textY;
+        let textX = centerX + textOffset;
+        let textY = centerY - textOffset;
         
-        if (isFlipped) {
-          // When flipped, adjust text positioning
+        // Adjust text position if it would go off screen
+        if (textX + (fontSize * 3) > canvas.width) {
           textX = centerX - textOffset - (fontSize * 3);
-          textY = centerY - textOffset;
-        } else {
-          textX = centerX + textOffset;
-          textY = centerY - textOffset;
+        }
+        if (textY - fontSize < 0) {
+          textY = centerY + textOffset + fontSize;
         }
 
         // Small text with background for readability
@@ -108,8 +120,15 @@ const OverlayCanvas = memo(({
     const drawSubtleEyeHint = (irisIndices, color) => {
       if (zoomLevel > 1.5) return; // Hide at higher zoom to reduce clutter
 
-      const centerX = irisIndices.reduce((sum, i) => sum + landmarks[i].x, 0) / irisIndices.length * canvas.width;
-      const centerY = irisIndices.reduce((sum, i) => sum + landmarks[i].y, 0) / irisIndices.length * canvas.height;
+      // Calculate center with proper coordinates
+      let centerX = 0, centerY = 0;
+      irisIndices.forEach(i => {
+        const coords = getCanvasCoordinates(landmarks[i]);
+        centerX += coords.x;
+        centerY += coords.y;
+      });
+      centerX /= irisIndices.length;
+      centerY /= irisIndices.length;
 
       // Just a tiny circle to indicate eye region
       ctx.strokeStyle = color;
@@ -121,25 +140,37 @@ const OverlayCanvas = memo(({
       ctx.globalAlpha = 1.0;
     };
 
+    // Draw iris landmark dots for debugging (only at very high zoom)
+    const drawIrisLandmarks = (irisIndices, color) => {
+      if (zoomLevel < 3) return;
+      
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.5;
+      irisIndices.forEach(i => {
+        const coords = getCanvasCoordinates(landmarks[i]);
+        ctx.beginPath();
+        ctx.arc(coords.x, coords.y, pointSize * 0.5, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1.0;
+    };
+
     // Draw minimal indicators
     if (showLeftEye) {
       drawSubtleEyeHint(leftIrisIndices, '#00BFFF');
+      drawIrisLandmarks(leftIrisIndices, '#00BFFF');
       const leftPupilSize = pupilData?.left?.size || null;
       drawMinimalPupilIndicator(leftIrisIndices, leftPupilSize, '#00BFFF', 'L');
     }
     
     if (showRightEye) {
       drawSubtleEyeHint(rightIrisIndices, '#FF00FF');
+      drawIrisLandmarks(rightIrisIndices, '#FF00FF');
       const rightPupilSize = pupilData?.right?.size || null;
       drawMinimalPupilIndicator(rightIrisIndices, rightPupilSize, '#FF00FF', 'R');
     }
 
-    // Restore canvas context if flipped
-    if (isFlipped) {
-      ctx.restore();
-    }
-
-    // Minimal zoom indicator (smaller and less intrusive) - not flipped
+    // Minimal zoom indicator (smaller and less intrusive)
     if (zoomLevel > 1) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       ctx.fillRect(canvas.width - 60, 10, 50, 20);
@@ -148,7 +179,7 @@ const OverlayCanvas = memo(({
       ctx.fillText(`${zoomLevel.toFixed(1)}x`, canvas.width - 55, 24);
     }
 
-    // Show confidence info only at very high zoom (text positioned away from pupil) - not flipped
+    // Show confidence info only at very high zoom
     if (zoomLevel >= 3 && pupilData) {
       const displayDetailedInfo = (data, x, y, color) => {
         if (!data) return;
@@ -169,6 +200,15 @@ const OverlayCanvas = memo(({
       if (showRightEye && pupilData.right) {
         displayDetailedInfo(pupilData.right, 10, 110, '#FF00FF');
       }
+    }
+
+    // Debug indicator to show flip status
+    if (isFlipped) {
+      ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+      ctx.fillRect(10, 10, 80, 20);
+      ctx.fillStyle = '#00FF00';
+      ctx.font = '10px Arial';
+      ctx.fillText('FLIPPED', 15, 24);
     }
 
   }, [landmarks, videoRef, showLeftEye, showRightEye, pupilData, zoomLevel, isFlipped]);
