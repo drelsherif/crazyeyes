@@ -1,4 +1,4 @@
-// components/OverlayCanvas.jsx - Subtle Non-Blocking Overlay
+// components/OverlayCanvas.jsx - Fixed for Horizontal Flip
 import React, { useRef, useEffect, memo } from 'react';
 
 const OverlayCanvas = memo(({ 
@@ -7,7 +7,8 @@ const OverlayCanvas = memo(({
   showLeftEye = true, 
   showRightEye = true, 
   pupilData,
-  zoomLevel = 1 
+  zoomLevel = 1,
+  isFlipped = false
 }) => {
   const canvasRef = useRef(null);
 
@@ -23,6 +24,13 @@ const OverlayCanvas = memo(({
     canvas.height = video.videoHeight || 480;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Apply horizontal flip to match the flipped video
+    if (isFlipped) {
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.translate(-canvas.width, 0);
+    }
 
     // Very thin line widths that won't block the pupil
     const thinLineWidth = Math.max(0.5, zoomLevel * 0.3);
@@ -60,8 +68,16 @@ const OverlayCanvas = memo(({
 
         // Position text outside the pupil area to avoid blocking
         const textOffset = (pupilSize / 2) + 15;
-        const textX = centerX + textOffset;
-        const textY = centerY - textOffset;
+        let textX, textY;
+        
+        if (isFlipped) {
+          // When flipped, adjust text positioning
+          textX = centerX - textOffset - (fontSize * 3);
+          textY = centerY - textOffset;
+        } else {
+          textX = centerX + textOffset;
+          textY = centerY - textOffset;
+        }
 
         // Small text with background for readability
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -118,7 +134,12 @@ const OverlayCanvas = memo(({
       drawMinimalPupilIndicator(rightIrisIndices, rightPupilSize, '#FF00FF', 'R');
     }
 
-    // Minimal zoom indicator (smaller and less intrusive)
+    // Restore canvas context if flipped
+    if (isFlipped) {
+      ctx.restore();
+    }
+
+    // Minimal zoom indicator (smaller and less intrusive) - not flipped
     if (zoomLevel > 1) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       ctx.fillRect(canvas.width - 60, 10, 50, 20);
@@ -127,7 +148,7 @@ const OverlayCanvas = memo(({
       ctx.fillText(`${zoomLevel.toFixed(1)}x`, canvas.width - 55, 24);
     }
 
-    // Show confidence info only on hover or at very high zoom (text positioned away from pupil)
+    // Show confidence info only at very high zoom (text positioned away from pupil) - not flipped
     if (zoomLevel >= 3 && pupilData) {
       const displayDetailedInfo = (data, x, y, color) => {
         if (!data) return;
@@ -150,7 +171,7 @@ const OverlayCanvas = memo(({
       }
     }
 
-  }, [landmarks, videoRef, showLeftEye, showRightEye, pupilData, zoomLevel]);
+  }, [landmarks, videoRef, showLeftEye, showRightEye, pupilData, zoomLevel, isFlipped]);
 
   return (
     <canvas

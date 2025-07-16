@@ -1,4 +1,4 @@
-// components/VideoPlayer.jsx - Enhanced with Zoom Controls
+// components/VideoPlayer.jsx - Fixed Camera Flip (Natural View)
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import useCamera from '../hooks/useCamera';
 import useFaceMesh from '../hooks/useFaceMesh';
@@ -51,17 +51,20 @@ function VideoPlayer({ onPupilData }) {
 
     if (eyeMode === 'left') {
       // Focus on left eye (landmarks around 468-472)
+      // Note: Since we're flipping horizontally, left eye appears on left side
       const leftEyePoints = [468, 469, 470, 471, 472];
       const avgX = leftEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / leftEyePoints.length;
       const avgY = leftEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / leftEyePoints.length;
-      targetX = avgX * 100;
+      // Flip X coordinate for natural view
+      targetX = (1 - avgX) * 100;
       targetY = avgY * 100;
     } else if (eyeMode === 'right') {
       // Focus on right eye (landmarks around 473-477)
       const rightEyePoints = [473, 474, 475, 476, 477];
       const avgX = rightEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / rightEyePoints.length;
       const avgY = rightEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / rightEyePoints.length;
-      targetX = avgX * 100;
+      // Flip X coordinate for natural view
+      targetX = (1 - avgX) * 100;
       targetY = avgY * 100;
     } else {
       // Focus on center between both eyes
@@ -71,7 +74,8 @@ function VideoPlayer({ onPupilData }) {
       const leftAvgY = leftEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / leftEyePoints.length;
       const rightAvgX = rightEyePoints.reduce((sum, i) => sum + landmarks[i].x, 0) / rightEyePoints.length;
       const rightAvgY = rightEyePoints.reduce((sum, i) => sum + landmarks[i].y, 0) / rightEyePoints.length;
-      targetX = ((leftAvgX + rightAvgX) / 2) * 100;
+      // Flip X coordinate for natural view
+      targetX = (1 - ((leftAvgX + rightAvgX) / 2)) * 100;
       targetY = ((leftAvgY + rightAvgY) / 2) * 100;
     }
 
@@ -95,11 +99,13 @@ function VideoPlayer({ onPupilData }) {
   useCamera(videoRef, handleFrame);
 
   // Handle manual zoom center adjustment (click to focus)
+  // Need to account for the horizontal flip
   const handleVideoClick = useCallback((event) => {
     if (!containerRef.current) return;
     
     const rect = containerRef.current.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * 100;
+    // Flip the X coordinate since video is horizontally flipped
+    const x = 100 - ((event.clientX - rect.left) / rect.width) * 100;
     const y = ((event.clientY - rect.top) / rect.height) * 100;
     
     setZoomCenter({ x, y });
@@ -116,13 +122,13 @@ function VideoPlayer({ onPupilData }) {
     { label: '5x', value: 5 }
   ];
 
-  // Calculate transform style for zoom
+  // Calculate transform style for zoom (includes horizontal flip)
   const getTransformStyle = () => {
     const translateX = (50 - zoomCenter.x) * zoomLevel;
     const translateY = (50 - zoomCenter.y) * zoomLevel;
     
     return {
-      transform: `scale(${zoomLevel}) translate(${translateX}%, ${translateY}%)`,
+      transform: `scaleX(-1) scale(${zoomLevel}) translate(${translateX}%, ${translateY}%)`,
       transformOrigin: 'center center',
       transition: autoZoom ? 'transform 0.3s ease-out' : 'transform 0.1s ease-out'
     };
@@ -235,6 +241,11 @@ function VideoPlayer({ onPupilData }) {
         </button>
       </div>
 
+      {/* Mirror Mode Indicator */}
+      <div className="text-xs text-green-400 bg-green-900 px-3 py-1 rounded">
+        📱 Natural View: Left eye on left, right eye on right
+      </div>
+
       {/* Zoom Info */}
       {zoomLevel > 1 && (
         <div className="text-xs text-gray-400 text-center">
@@ -268,6 +279,7 @@ function VideoPlayer({ onPupilData }) {
               showRightEye={eyeMode === 'both' || eyeMode === 'right'}
               pupilData={pupilData}
               zoomLevel={zoomLevel}
+              isFlipped={true}
             />
           )}
         </div>
@@ -277,7 +289,7 @@ function VideoPlayer({ onPupilData }) {
           <div 
             className="absolute w-2 h-2 bg-red-500 rounded-full pointer-events-none"
             style={{
-              left: `${zoomCenter.x}%`,
+              left: `${100 - zoomCenter.x}%`, // Flip position for display
               top: `${zoomCenter.y}%`,
               transform: 'translate(-50%, -50%)',
               zIndex: 20
